@@ -1,0 +1,965 @@
+// ============================================================
+// TENANT DATABASE SCHEMA
+// This schema defines the business data tables for each tenant
+// Each company gets their own database with this schema
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/tenant-client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ================== ENUMS ==================
+
+enum TaxType {
+  exclusive
+  inclusive
+}
+
+enum Unit {
+  pieces
+  kg
+  gram
+  liters
+  ml
+  box
+  pack
+}
+
+enum DiscountType {
+  percentage
+  fixed
+}
+
+enum PaymentMethod {
+  cash
+  card
+  online
+  split
+  wallet
+}
+
+enum PaymentStatus {
+  pending
+  partial
+  paid
+  refunded
+}
+
+enum OrderStatus {
+  draft
+  hold
+  pending
+  confirmed
+  kitchen
+  preparing
+  ready
+  served
+  completed
+  cancelled
+  invoiced
+  refunded
+}
+
+enum OrderType {
+  dine_in
+  take_away
+  delivery
+  self_pickup
+}
+
+enum OrderSource {
+  pos
+  ecom
+  phone
+}
+
+enum OrderItemStatus {
+  pending
+  preparing
+  ready
+  served
+  cancelled
+}
+
+enum InventoryMovementType {
+  in
+  out
+  adjustment
+  transfer
+}
+
+enum InventoryReason {
+  purchase
+  sale
+  return_stock
+  damage
+  loss
+  correction
+  transfer_in
+  transfer_out
+  opening
+  other
+}
+
+enum StockAlertStatus {
+  active
+  dismissed
+  resolved
+}
+
+enum TableStatus {
+  available
+  occupied
+  reserved
+  cleaning
+}
+
+enum TableShape {
+  square
+  round
+  rectangle
+}
+
+enum NotificationType {
+  order_created
+  order_ready
+  order_cancelled
+  low_stock
+  payment_received
+  new_customer
+  system
+}
+
+enum NotificationChannel {
+  in_app
+  email
+  push
+  all
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  paid
+  partial
+  cancelled
+}
+
+enum AccountType {
+  asset
+  liability
+  equity
+  revenue
+  expense
+}
+
+enum TransactionType {
+  sale
+  refund
+  expense
+  transfer
+  adjustment
+}
+
+enum JournalEntryType {
+  general
+  adjusting
+  closing
+  reversing
+}
+
+enum JournalEntryStatus {
+  draft
+  posted
+  void
+}
+
+// ================== BRANCHES ==================
+// Multiple branches under one company
+
+model Branch {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(255)
+  code         String   @unique @db.VarChar(50)
+  address      String?  @db.Text
+  city         String?  @db.VarChar(100)
+  phone        String?  @db.VarChar(50)
+  email        String?  @db.VarChar(255)
+  isActive     Boolean  @default(true) @map("is_active")
+  isMain       Boolean  @default(false) @map("is_main")
+  settings     Json?    // Branch-specific settings (currency, tax, receipt headers)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users              BranchUser[]
+  categories         Category[]
+  products           Product[]
+  productStocks      ProductStock[]
+  orders             Order[]
+  heldOrders         HeldOrder[]
+  menus              Menu[]
+  halls              Hall[]
+  tables             Table[]
+  customers          Customer[]
+  notifications      Notification[]
+  inventoryMovements InventoryMovement[]
+  stockAlerts        StockAlert[]
+  invoices           Invoice[]
+  accounts           Account[]
+  transactions       Transaction[]
+  journalEntries     JournalEntry[]
+  printers           Printer[]
+  taxSettings        TaxSetting[]
+  discountSettings   DiscountSetting[]
+
+  @@map("branches")
+}
+
+// ================== BRANCH USERS ==================
+// Users assigned to specific branches with roles
+// Role ID references system_db.roles
+
+model BranchUser {
+  id               Int      @id @default(autoincrement())
+  branchId         Int      @map("branch_id")
+  systemUserId     Int      @map("system_user_id") // References system_db.system_users.id
+  roleId           Int      @map("role_id") // References system_db.roles.id
+  name             String   @db.VarChar(255)
+  email            String   @db.VarChar(255)
+  phone            String?  @db.VarChar(50)
+  avatar           String?  @db.VarChar(500)
+  pin              String?  @db.VarChar(10) // Quick POS login PIN
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  branch             Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  orders             Order[]
+  heldOrders         HeldOrder[]
+  cancelledOrders    Order[]             @relation("CancelledBy")
+  refundedOrders     Order[]             @relation("RefundedBy")
+  inventoryMovements InventoryMovement[]
+  notifications      Notification[]
+
+  @@unique([branchId, systemUserId])
+  @@unique([branchId, email])
+  @@index([branchId])
+  @@index([systemUserId])
+  @@map("branch_users")
+}
+
+// ================== CATEGORIES ==================
+
+model Category {
+  id           Int      @id @default(autoincrement())
+  branchId     Int      @map("branch_id")
+  parentId     Int?     @map("parent_id")
+  name         String   @db.VarChar(255)
+  slug         String   @db.VarChar(255)
+  description  String?  @db.Text
+  image        String?  @db.VarChar(500)
+  color        String?  @db.VarChar(20)
+  icon         String?  @db.VarChar(50)
+  kitchen      String?  @db.VarChar(100)
+  displayOrder Int      @default(0) @map("display_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  branch   Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryHierarchy")
+  products Product[]
+
+  @@unique([branchId, slug])
+  @@index([branchId])
+  @@index([parentId])
+  @@map("categories")
+}
+
+// ================== PRODUCTS ==================
+
+model Product {
+  id                Int      @id @default(autoincrement())
+  branchId          Int      @map("branch_id")
+  categoryId        Int?     @map("category_id")
+  name              String   @db.VarChar(255)
+  slug              String?  @db.VarChar(255)
+  sku               String   @db.VarChar(100)
+  barcode           String?  @db.VarChar(100)
+  description       String?  @db.Text
+  basePrice         Decimal  @default(0) @map("base_price") @db.Decimal(10, 2)
+  sellingPrice      Decimal  @default(0) @map("selling_price") @db.Decimal(10, 2)
+  costPrice         Decimal  @default(0) @map("cost_price") @db.Decimal(10, 2)
+  taxRate           Decimal  @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  hasVariations     Boolean  @default(false) @map("has_variations")
+  trackStock        Boolean  @default(true) @map("track_stock")
+  stockQuantity     Int      @default(0) @map("stock_quantity")
+  lowStockThreshold Int      @default(10) @map("low_stock_threshold")
+  image             String?  @db.VarChar(500)
+  images            Json?
+  isActive          Boolean  @default(true) @map("is_active")
+  isFeatured        Boolean  @default(false) @map("is_featured")
+  displayOrder      Int      @default(0) @map("display_order")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  branch             Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  category           Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variations         ProductVariation[]
+  modifiers          ProductModifier[]
+  stocks             ProductStock[]
+  orderItems         OrderItem[]
+  heldItems          HeldOrderItem[]
+  menuProducts       MenuProduct[]
+  inventoryMovements InventoryMovement[]
+  stockAlerts        StockAlert[]
+
+  @@unique([branchId, sku])
+  @@index([branchId])
+  @@index([categoryId])
+  @@index([barcode])
+  @@map("products")
+}
+
+model ProductVariation {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  name          String   @db.VarChar(255)
+  sku           String?  @db.VarChar(100)
+  barcode       String?  @db.VarChar(100)
+  price         Decimal  @db.Decimal(10, 2)
+  costPrice     Decimal  @default(0) @map("cost_price") @db.Decimal(10, 2)
+  stockQuantity Int      @default(0) @map("stock_quantity")
+  image         String?  @db.VarChar(500)
+  isActive      Boolean  @default(true) @map("is_active")
+  displayOrder  Int      @default(0) @map("display_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  product            Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems         OrderItem[]
+  inventoryMovements InventoryMovement[]
+  stockAlerts        StockAlert[]
+
+  @@index([productId])
+  @@map("product_variations")
+}
+
+model ProductModifier {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  name          String   @db.VarChar(255)
+  price         Decimal  @default(0) @db.Decimal(10, 2)
+  isRequired    Boolean  @default(false) @map("is_required")
+  maxSelections Int      @default(1) @map("max_selections")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  product Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  options ModifierOption[]
+
+  @@index([productId])
+  @@map("product_modifiers")
+}
+
+model ModifierOption {
+  id         Int      @id @default(autoincrement())
+  modifierId Int      @map("modifier_id")
+  name       String   @db.VarChar(255)
+  price      Decimal  @default(0) @db.Decimal(10, 2)
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  modifier ProductModifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+
+  @@index([modifierId])
+  @@map("modifier_options")
+}
+
+model ProductStock {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  branchId      Int      @map("branch_id")
+  stockQuantity Int      @default(0) @map("stock_quantity")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, branchId])
+  @@map("product_stocks")
+}
+
+// ================== MENUS ==================
+
+model Menu {
+  id             Int      @id @default(autoincrement())
+  branchId       Int      @map("branch_id")
+  name           String   @db.VarChar(255)
+  description    String?  @db.Text
+  activeTimeFrom String?  @map("active_time_from") @db.VarChar(8)
+  activeTimeTo   String?  @map("active_time_to") @db.VarChar(8)
+  activeDays     Json?    @map("active_days")
+  isActive       Boolean  @default(true) @map("is_active")
+  displayOrder   Int      @default(0) @map("display_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  branch   Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  products MenuProduct[]
+
+  @@index([branchId])
+  @@map("menus")
+}
+
+model MenuProduct {
+  id           Int      @id @default(autoincrement())
+  menuId       Int      @map("menu_id")
+  productId    Int      @map("product_id")
+  customPrice  Decimal? @map("custom_price") @db.Decimal(10, 2)
+  displayOrder Int      @default(0) @map("display_order")
+
+  // Relations
+  menu    Menu    @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([menuId, productId])
+  @@map("menu_products")
+}
+
+// ================== CUSTOMERS ==================
+
+model Customer {
+  id            Int       @id @default(autoincrement())
+  branchId      Int       @map("branch_id")
+  name          String    @db.VarChar(255)
+  email         String?   @db.VarChar(255)
+  phone         String?   @db.VarChar(50)
+  address       String?   @db.Text
+  city          String?   @db.VarChar(100)
+  notes         String?   @db.Text
+  taxNumber     String?   @map("tax_number") @db.VarChar(100)
+  loyaltyPoints Int       @default(0) @map("loyalty_points")
+  totalOrders   Int       @default(0) @map("total_orders")
+  totalSpent    Decimal   @default(0) @map("total_spent") @db.Decimal(12, 2)
+  isActive      Boolean   @default(true) @map("is_active")
+  lastOrderAt   DateTime? @map("last_order_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  branch     Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  orders     Order[]
+  heldOrders HeldOrder[]
+  invoices   Invoice[]
+
+  @@index([branchId])
+  @@index([phone])
+  @@index([email])
+  @@map("customers")
+}
+
+// ================== TABLES & HALLS ==================
+
+model Hall {
+  id           Int      @id @default(autoincrement())
+  branchId     Int      @map("branch_id")
+  name         String   @db.VarChar(255)
+  description  String?  @db.Text
+  isActive     Boolean  @default(true) @map("is_active")
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  branch Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tables Table[]
+
+  @@index([branchId])
+  @@map("halls")
+}
+
+model Table {
+  id             Int         @id @default(autoincrement())
+  branchId       Int         @map("branch_id")
+  hallId         Int?        @map("hall_id")
+  name           String      @db.VarChar(100)
+  capacity       Int         @default(4)
+  status         TableStatus @default(available)
+  currentOrderId Int?        @map("current_order_id")
+  positionX      Int?        @map("position_x")
+  positionY      Int?        @map("position_y")
+  shape          TableShape  @default(square)
+  isActive       Boolean     @default(true) @map("is_active")
+  displayOrder   Int         @default(0) @map("display_order")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  branch       Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  hall         Hall?         @relation(fields: [hallId], references: [id], onDelete: SetNull)
+  orders       Order[]
+  heldOrders   HeldOrder[]
+  reservations Reservation[]
+
+  @@index([branchId])
+  @@index([hallId])
+  @@map("tables")
+}
+
+// ================== ORDERS ==================
+
+model Order {
+  id              Int           @id @default(autoincrement())
+  branchId        Int           @map("branch_id")
+  customerId      Int?          @map("customer_id")
+  userId          Int           @map("user_id") // References branch_users.id
+  tableId         Int?          @map("table_id")
+  orderNumber     String        @unique @map("order_number") @db.VarChar(50)
+  orderType       OrderType     @default(dine_in) @map("order_type")
+  orderSource     OrderSource   @default(pos) @map("order_source")
+  subtotal        Decimal       @default(0) @db.Decimal(12, 2)
+  discountType    DiscountType? @map("discount_type")
+  discountValue   Decimal       @default(0) @map("discount_value") @db.Decimal(10, 2)
+  discountAmount  Decimal       @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxRate         Decimal       @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  taxAmount       Decimal       @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  total           Decimal       @default(0) @db.Decimal(12, 2)
+  paymentStatus   PaymentStatus @default(pending) @map("payment_status")
+  paymentMethod   PaymentMethod @default(cash) @map("payment_method")
+  paidAmount      Decimal       @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  changeAmount    Decimal       @default(0) @map("change_amount") @db.Decimal(12, 2)
+  status          OrderStatus   @default(pending)
+  notes           String?       @db.Text
+  kitchenNotes    String?       @map("kitchen_notes") @db.Text
+  deliveryAddress String?       @map("delivery_address") @db.Text
+  deliveryPhone   String?       @map("delivery_phone") @db.VarChar(50)
+  heldOrderId     Int?          @unique @map("held_order_id")
+  isHeld          Boolean       @default(false) @map("is_held")
+  heldAt          DateTime?     @map("held_at")
+  cancelledAt     DateTime?     @map("cancelled_at")
+  cancelledById   Int?          @map("cancelled_by_id")
+  refundedAt      DateTime?     @map("refunded_at")
+  refundedById    Int?          @map("refunded_by_id")
+  refundReason    String?       @map("refund_reason") @db.Text
+  completedAt     DateTime?     @map("completed_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  branch      Branch       @relation(fields: [branchId], references: [id])
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  user        BranchUser   @relation(fields: [userId], references: [id])
+  table       Table?       @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  cancelledBy BranchUser?  @relation("CancelledBy", fields: [cancelledById], references: [id])
+  refundedBy  BranchUser?  @relation("RefundedBy", fields: [refundedById], references: [id])
+  heldOrder   HeldOrder?   @relation(fields: [heldOrderId], references: [id], onDelete: SetNull)
+  items       OrderItem[]
+  payments    OrderPayment[]
+  invoice     Invoice?
+
+  @@index([orderNumber])
+  @@index([branchId])
+  @@index([customerId])
+  @@index([userId])
+  @@index([tableId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             Int             @id @default(autoincrement())
+  orderId        Int             @map("order_id")
+  productId      Int             @map("product_id")
+  variationId    Int?            @map("variation_id")
+  productName    String          @map("product_name") @db.VarChar(255)
+  variationName  String?         @map("variation_name") @db.VarChar(255)
+  sku            String?         @db.VarChar(100)
+  quantity       Int
+  unitPrice      Decimal         @map("unit_price") @db.Decimal(10, 2)
+  costPrice      Decimal         @default(0) @map("cost_price") @db.Decimal(10, 2)
+  discountAmount Decimal         @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  taxAmount      Decimal         @default(0) @map("tax_amount") @db.Decimal(10, 2)
+  total          Decimal         @db.Decimal(12, 2)
+  modifiers      Json?
+  notes          String?         @db.Text
+  status         OrderItemStatus @default(pending)
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  // Relations
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product           @relation(fields: [productId], references: [id])
+  variation ProductVariation? @relation(fields: [variationId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model OrderPayment {
+  id            Int           @id @default(autoincrement())
+  orderId       Int           @map("order_id")
+  paymentMethod PaymentMethod @map("payment_method")
+  amount        Decimal       @db.Decimal(12, 2)
+  reference     String?       @db.VarChar(255)
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_payments")
+}
+
+model HeldOrder {
+  id         Int       @id @default(autoincrement())
+  branchId   Int       @map("branch_id")
+  userId     Int       @map("user_id")
+  customerId Int?      @map("customer_id")
+  tableId    Int?      @map("table_id")
+  orderType  OrderType @default(dine_in) @map("order_type")
+  name       String?   @db.VarChar(255)
+  items      Json
+  subtotal   Decimal   @default(0) @db.Decimal(12, 2)
+  discountType  DiscountType? @map("discount_type")
+  discountValue Decimal       @default(0) @map("discount_value") @db.Decimal(12, 2)
+  taxRate    Decimal   @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  taxAmount  Decimal   @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  notes      String?   @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  user     BranchUser      @relation(fields: [userId], references: [id])
+  customer Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  table    Table?          @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  order    Order?
+  itemList HeldOrderItem[]
+
+  @@index([branchId])
+  @@index([userId])
+  @@map("held_orders")
+}
+
+model HeldOrderItem {
+  id            Int           @id @default(autoincrement())
+  heldOrderId   Int           @map("held_order_id")
+  productId     Int           @map("product_id")
+  quantity      Int
+  unitPrice     Decimal       @map("unit_price") @db.Decimal(12, 2)
+  discountType  DiscountType? @map("discount_type")
+  discountValue Decimal?      @map("discount_value") @db.Decimal(12, 2)
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  heldOrder HeldOrder @relation(fields: [heldOrderId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@index([heldOrderId])
+  @@map("held_order_items")
+}
+
+// ================== INVENTORY ==================
+
+model InventoryMovement {
+  id             Int                   @id @default(autoincrement())
+  branchId       Int                   @map("branch_id")
+  productId      Int                   @map("product_id")
+  variationId    Int?                  @map("variation_id")
+  userId         Int                   @map("user_id")
+  type           InventoryMovementType
+  reason         InventoryReason
+  quantity       Int
+  quantityBefore Int                   @map("quantity_before")
+  quantityAfter  Int                   @map("quantity_after")
+  unitCost       Decimal?              @map("unit_cost") @db.Decimal(10, 2)
+  reference      String?               @db.VarChar(255)
+  notes          String?               @db.Text
+  createdAt      DateTime              @default(now()) @map("created_at")
+
+  // Relations
+  branch    Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product   Product           @relation(fields: [productId], references: [id])
+  variation ProductVariation? @relation(fields: [variationId], references: [id], onDelete: SetNull)
+  user      BranchUser        @relation(fields: [userId], references: [id])
+
+  @@index([branchId])
+  @@index([productId])
+  @@index([createdAt])
+  @@map("inventory_movements")
+}
+
+model StockAlert {
+  id              Int              @id @default(autoincrement())
+  branchId        Int              @map("branch_id")
+  productId       Int              @map("product_id")
+  variationId     Int?             @map("variation_id")
+  productName     String           @map("product_name") @db.VarChar(255)
+  sku             String?          @db.VarChar(100)
+  currentStock    Int              @map("current_stock")
+  minStock        Int              @map("min_stock")
+  reorderQuantity Int?             @map("reorder_quantity")
+  status          StockAlertStatus @default(active)
+  dismissedAt     DateTime?        @map("dismissed_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  branch    Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product   Product           @relation(fields: [productId], references: [id])
+  variation ProductVariation? @relation(fields: [variationId], references: [id], onDelete: SetNull)
+
+  @@index([branchId])
+  @@index([productId])
+  @@map("stock_alerts")
+}
+
+// ================== NOTIFICATIONS ==================
+
+model Notification {
+  id        Int                 @id @default(autoincrement())
+  branchId  Int                 @map("branch_id")
+  userId    Int?                @map("user_id")
+  type      NotificationType
+  title     String              @db.VarChar(255)
+  message   String?             @db.Text
+  data      Json?
+  channel   NotificationChannel @default(in_app)
+  isRead    Boolean             @default(false) @map("is_read")
+  readAt    DateTime?           @map("read_at")
+  sound     String              @default("default") @db.VarChar(100)
+  createdAt DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  branch Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  user   BranchUser? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@index([userId])
+  @@map("notifications")
+}
+
+// ================== ACCOUNTING ==================
+
+model Invoice {
+  id               Int           @id @default(autoincrement())
+  branchId         Int           @map("branch_id")
+  orderId          Int?          @unique @map("order_id")
+  customerId       Int?          @map("customer_id")
+  invoiceNumber    String        @unique @map("invoice_number") @db.VarChar(50)
+  orderNumber      String?       @map("order_number") @db.VarChar(50)
+  subtotal         Decimal       @db.Decimal(12, 2)
+  discountAmount   Decimal       @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxAmount        Decimal       @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  total            Decimal       @db.Decimal(12, 2)
+  paidAmount       Decimal       @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  dueAmount        Decimal       @default(0) @map("due_amount") @db.Decimal(12, 2)
+  status           InvoiceStatus @default(issued)
+  paymentMethod    String?       @map("payment_method") @db.VarChar(50)
+  paymentReference String?       @map("payment_reference") @db.VarChar(255)
+  dueDate          DateTime?     @map("due_date") @db.Date
+  notes            String?       @db.Text
+  terms            String?       @db.Text
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  branch   Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  order    Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([branchId])
+  @@index([invoiceNumber])
+  @@map("invoices")
+}
+
+model Account {
+  id          Int         @id @default(autoincrement())
+  branchId    Int         @map("branch_id")
+  parentId    Int?        @map("parent_id")
+  code        String      @db.VarChar(20)
+  name        String      @db.VarChar(255)
+  type        AccountType
+  description String?     @db.Text
+  level       Int         @default(1)
+  balance     Decimal     @default(0) @db.Decimal(15, 2)
+  isSystem    Boolean     @default(false) @map("is_system")
+  isActive    Boolean     @default(true) @map("is_active")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  branch       Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  parent       Account?            @relation("AccountHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Account[]           @relation("AccountHierarchy")
+  journalLines JournalEntryLine[]
+
+  @@unique([branchId, code])
+  @@index([branchId])
+  @@index([parentId])
+  @@index([type])
+  @@map("accounts")
+}
+
+model Transaction {
+  id            Int             @id @default(autoincrement())
+  branchId      Int             @map("branch_id")
+  transactionId String          @unique @map("transaction_id") @db.VarChar(50)
+  type          TransactionType
+  referenceType String?         @map("reference_type") @db.VarChar(50)
+  referenceId   Int?            @map("reference_id")
+  description   String?         @db.Text
+  debit         Decimal         @default(0) @db.Decimal(12, 2)
+  credit        Decimal         @default(0) @db.Decimal(12, 2)
+  balance       Decimal         @default(0) @db.Decimal(12, 2)
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  // Relations
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+model JournalEntry {
+  id          Int                @id @default(autoincrement())
+  branchId    Int                @map("branch_id")
+  entryNumber String             @unique @map("entry_number") @db.VarChar(50)
+  entryDate   DateTime           @map("entry_date") @db.Date
+  entryType   JournalEntryType   @default(general) @map("entry_type")
+  description String?            @db.Text
+  reference   String?            @db.VarChar(255)
+  totalDebit  Decimal            @map("total_debit") @db.Decimal(12, 2)
+  totalCredit Decimal            @map("total_credit") @db.Decimal(12, 2)
+  status      JournalEntryStatus @default(posted)
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  // Relations
+  branch Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  lines  JournalEntryLine[]
+
+  @@index([branchId])
+  @@index([entryDate])
+  @@map("journal_entries")
+}
+
+model JournalEntryLine {
+  id          Int     @id @default(autoincrement())
+  entryId     Int     @map("entry_id")
+  accountId   Int     @map("account_id")
+  description String? @db.Text
+  debit       Decimal @default(0) @db.Decimal(12, 2)
+  credit      Decimal @default(0) @db.Decimal(12, 2)
+
+  // Relations
+  entry   JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id])
+
+  @@index([entryId])
+  @@index([accountId])
+  @@map("journal_entry_lines")
+}
+
+// ================== SETTINGS ==================
+
+model TaxSetting {
+  id        Int      @id @default(autoincrement())
+  branchId  Int      @map("branch_id")
+  name      String   @db.VarChar(100)
+  rate      Decimal  @db.Decimal(5, 2)
+  type      TaxType  @default(exclusive)
+  isDefault Boolean  @default(false) @map("is_default")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@map("tax_settings")
+}
+
+model DiscountSetting {
+  id        Int          @id @default(autoincrement())
+  branchId  Int          @map("branch_id")
+  name      String       @db.VarChar(100)
+  type      DiscountType
+  value     Decimal      @db.Decimal(10, 2)
+  minOrder  Decimal?     @map("min_order") @db.Decimal(10, 2)
+  maxAmount Decimal?     @map("max_amount") @db.Decimal(10, 2)
+  isActive  Boolean      @default(true) @map("is_active")
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@map("discount_settings")
+}
+
+model Printer {
+  id           Int      @id @default(autoincrement())
+  branchId     Int      @map("branch_id")
+  name         String   @db.VarChar(100)
+  type         String   @db.VarChar(50) // thermal, a4, a5
+  connection   String   @db.VarChar(50) // usb, network, bluetooth
+  address      String?  @db.VarChar(255) // IP or device path
+  width        Int      @default(80) // mm for thermal
+  isDefault    Boolean  @default(false) @map("is_default")
+  isActive     Boolean  @default(true) @map("is_active")
+  printReceipt Boolean  @default(true) @map("print_receipt")
+  printKitchen Boolean  @default(false) @map("print_kitchen")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@map("printers")
+}
+
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique @db.VarChar(100)
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+// ================== RESERVATIONS ==================
+
+model Reservation {
+  id            Int       @id @default(autoincrement())
+  branchId      Int       @map("branch_id")
+  tableId       Int       @map("table_id")
+  customerName  String    @map("customer_name") @db.VarChar(255)
+  customerPhone String    @map("customer_phone") @db.VarChar(50)
+  customerEmail String?   @map("customer_email") @db.VarChar(255)
+  date          DateTime  @db.Date
+  time          String    @db.VarChar(10)
+  partySize     Int       @map("party_size")
+  status        String    @default("pending") @db.VarChar(50)
+  notes         String?   @db.Text
+  confirmedAt   DateTime? @map("confirmed_at")
+  cancelledAt   DateTime? @map("cancelled_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  table Table @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@index([tableId])
+  @@index([date])
+  @@map("reservations")
+}

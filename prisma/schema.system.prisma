@@ -1,0 +1,277 @@
+// ============================================================
+// SYSTEM DATABASE SCHEMA
+// This schema defines the system-level tables that manage
+// authentication, companies, roles, permissions, and menus
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/system-client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("SYSTEM_DATABASE_URL")
+}
+
+// ================== ENUMS ==================
+
+enum UserStatus {
+  active
+  inactive
+  suspended
+  pending
+}
+
+enum CompanyStatus {
+  active
+  inactive
+  suspended
+  trial
+}
+
+enum MenuType {
+  module      // Main module (POS, Sales, Inventory, Accounts)
+  menu        // Menu item inside module
+  submenu     // Submenu inside menu
+  report      // Report item
+  list        // Common list (taxes, discounts, printers)
+}
+
+enum PermissionAction {
+  view
+  create
+  update
+  delete
+  export
+  print
+}
+
+// ================== SYSTEM USERS ==================
+// Master login record - credentials stored here only
+
+model SystemUser {
+  id              Int          @id @default(autoincrement())
+  companyId       Int?         @map("company_id")
+  email           String       @unique @db.VarChar(255)
+  password        String       @db.VarChar(255)
+  name            String       @db.VarChar(255)
+  phone           String?      @db.VarChar(50)
+  avatar          String?      @db.VarChar(500)
+  status          UserStatus   @default(pending)
+  isMaster        Boolean      @default(false) @map("is_master")
+  emailVerifiedAt DateTime?    @map("email_verified_at")
+  lastLoginAt     DateTime?    @map("last_login_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  company         Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tokens          Token[]
+  otps            UserOtp[]
+
+  @@index([companyId])
+  @@index([email])
+  @@map("system_users")
+}
+
+// ================== OTP ==================
+
+model UserOtp {
+  id         Int       @id @default(autoincrement())
+  userId     Int       @map("user_id")
+  code       String    @db.VarChar(10)
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user SystemUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([code])
+  @@map("user_otps")
+}
+
+// ================== TOKENS ==================
+
+model Token {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  token     String   @db.VarChar(500)
+  type      String   @db.VarChar(50) // access, refresh
+  expiresAt DateTime @map("expires_at")
+  isRevoked Boolean  @default(false) @map("is_revoked")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user SystemUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token(length: 255)])
+  @@index([userId])
+  @@map("tokens")
+}
+
+// ================== COMPANIES ==================
+// Each company is a tenant with its own database
+
+model Company {
+  id             Int           @id @default(autoincrement())
+  name           String        @db.VarChar(255)
+  slug           String        @unique @db.VarChar(255)
+  email          String?       @db.VarChar(255)
+  phone          String?       @db.VarChar(50)
+  address        String?       @db.Text
+  logo           String?       @db.VarChar(500)
+  tenantDb       String        @unique @map("tenant_db") @db.VarChar(128)
+  status         CompanyStatus @default(trial)
+  trialEndsAt    DateTime?     @map("trial_ends_at")
+  subscriptionId String?       @map("subscription_id") @db.VarChar(100)
+  settings       Json?         // Company-level settings
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  users          SystemUser[]
+  roles          Role[]
+
+  @@index([slug])
+  @@index([tenantDb])
+  @@map("companies")
+}
+
+// ================== SYSTEM MENUS ==================
+// Defines all modules, menus, reports available in the system
+
+model SystemMenu {
+  id           Int       @id @default(autoincrement())
+  parentId     Int?      @map("parent_id")
+  code         String    @unique @db.VarChar(100) // pos, sales, inventory, accounts, pos.orders, etc.
+  name         String    @db.VarChar(255)
+  nameAr       String?   @map("name_ar") @db.VarChar(255)
+  nameUr       String?   @map("name_ur") @db.VarChar(255)
+  description  String?   @db.Text
+  type         MenuType  @default(menu)
+  icon         String?   @db.VarChar(100)
+  route        String?   @db.VarChar(255) // Frontend route
+  displayOrder Int       @default(0) @map("display_order")
+  isActive     Boolean   @default(true) @map("is_active")
+  isSystem     Boolean   @default(false) @map("is_system") // Cannot be deleted
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Self-relation for hierarchy
+  parent       SystemMenu?  @relation("MenuHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     SystemMenu[] @relation("MenuHierarchy")
+
+  // Relations
+  rolePermissions RolePermission[]
+
+  @@index([parentId])
+  @@index([code])
+  @@index([type])
+  @@map("system_menus")
+}
+
+// ================== ROLES ==================
+// Custom roles created by master user for their company
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  companyId   Int      @map("company_id")
+  name        String   @db.VarChar(100)
+  code        String   @db.VarChar(50) // owner, manager, cashier, etc.
+  description String?  @db.Text
+  isSystem    Boolean  @default(false) @map("is_system") // Default roles cannot be deleted
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("roles")
+}
+
+// ================== ROLE PERMISSIONS ==================
+// Maps roles to menu permissions (view, create, update, delete)
+
+model RolePermission {
+  id        Int      @id @default(autoincrement())
+  roleId    Int      @map("role_id")
+  menuId    Int      @map("menu_id")
+  canView   Boolean  @default(false) @map("can_view")
+  canCreate Boolean  @default(false) @map("can_create")
+  canUpdate Boolean  @default(false) @map("can_update")
+  canDelete Boolean  @default(false) @map("can_delete")
+  canExport Boolean  @default(false) @map("can_export")
+  canPrint  Boolean  @default(false) @map("can_print")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  role Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menu SystemMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, menuId])
+  @@index([roleId])
+  @@index([menuId])
+  @@map("role_permissions")
+}
+
+// ================== SYSTEM SETTINGS ==================
+// Global system settings
+
+model SystemSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique @db.VarChar(100)
+  value     Json
+  group     String?  @db.VarChar(50) // general, email, sms, etc.
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([key])
+  @@index([group])
+  @@map("system_settings")
+}
+
+// ================== COMMON LISTS ==================
+// Tax rates, discount types, payment methods - shared templates
+
+model TaxTemplate {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  rate        Decimal  @db.Decimal(5, 2)
+  type        String   @db.VarChar(20) // inclusive, exclusive
+  isDefault   Boolean  @default(false) @map("is_default")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("tax_templates")
+}
+
+model PaymentMethodTemplate {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  code        String   @unique @db.VarChar(50)
+  icon        String?  @db.VarChar(100)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("payment_method_templates")
+}
+
+model PrinterTemplate {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  type        String   @db.VarChar(50) // thermal, a4, a5
+  width       Int      @default(80) // mm for thermal
+  template    String   @db.Text // HTML/template content
+  isDefault   Boolean  @default(false) @map("is_default")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("printer_templates")
+}
