@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { bcrypt: bcryptConfig, pagination: paginationConfig } = require('../config/constants');
 const { NotFoundError, ConflictError } = require('../middlewares/errorHandler');
 

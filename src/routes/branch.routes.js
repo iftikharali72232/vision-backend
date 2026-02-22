@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const branchController = require('../controllers/branch.controller.new');
-const { authenticate, requirePermission } = require('../middlewares/auth.new');
+const branchController = require('../controllers/branch.controller');
+const { authenticate, requirePermission } = require('../middlewares/auth');
 const validate = require('../middlewares/validate');
 const branchValidation = require('../validations/branch.validation');
 

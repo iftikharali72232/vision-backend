@@ -19,16 +19,18 @@ const notificationRoutes = require('./notification.routes');
 const accountingRoutes = require('./accounting.routes');
 const heldOrdersRoutes = require('./held-orders.routes');
 const translationRoutes = require('./translation.routes');
+const uploadRoutes = require('./upload.routes');
 
 // New system routes
 const roleRoutes = require('./role.routes');
 const systemMenuRoutes = require('./systemMenu.routes');
 const printerRoutes = require('./printer.routes');
+const printRoutes = require('./print.routes');
 
 // Import controllers for aliases
 const accountingController = require('../controllers/accounting.controller');
 const tableController = require('../controllers/table.controller');
-const { authenticate, hasPermission, requireBranch } = require('../middlewares/auth');
+const { authenticate, hasPermission, requireBranch, requireMaster } = require('../middlewares/auth');
 
 // Mount routes
 router.use('/auth', authRoutes);
@@ -48,11 +50,13 @@ router.use('/notifications', notificationRoutes);
 router.use('/accounting', accountingRoutes);
 router.use('/held-orders', heldOrdersRoutes);
 router.use('/translations', translationRoutes);
+router.use('/uploads', uploadRoutes);
 
 // System management routes
 router.use('/roles', roleRoutes);
 router.use('/system-menus', systemMenuRoutes);
 router.use('/printers', printerRoutes);
+router.use('/print', printRoutes);
 
 // Alias route for product-categories
 router.use('/product-categories', categoryRoutes);
@@ -100,7 +104,9 @@ router.get('/', (req, res) => {
       translations: '/api/v1/translations',
       heldOrders: '/api/v1/held-orders',
       roles: '/api/v1/roles',
-      systemMenus: '/api/v1/system-menus'
+      systemMenus: '/api/v1/system-menus',
+      print: '/api/v1/print',
+      printers: '/api/v1/printers'
     }
   });
 });

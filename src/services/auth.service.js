@@ -1,83 +1,146 @@
+/**
+ * Authentication Service
+ * Handles user authentication, registration, OTP verification, and session management
+ * Uses system database for authentication, tenant database for business data
+ */
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { masterPrisma, getTenantPrismaByDbName } = require('../config/prismaManager');
-const userService = require('../services/user.service');
-const { jwt: jwtConfig, bcrypt: bcryptConfig, permissions: rolePermissions } = require('../config/constants');
+const { 
+  systemPrisma, 
+  getTenantPrisma, 
+  buildTenantDbName 
+} = require('../config/database');
+const { jwt: jwtConfig, bcrypt: bcryptConfig } = require('../config/constants');
 const { AuthenticationError, NotFoundError, AppError } = require('../middlewares/errorHandler');
-const tenantService = require('./tenant.service');
-const { buildTenantDatabaseUrl, parseMysqlUrl } = require('../utils/mysqlUrl');
 
 class AuthService {
   /**
-   * Login user and return tokens
+   * Login user with email and password
+   * @param {string} email - User email
+   * @param {string} password - User password
+   * @returns {object} Login response with token, user, company, branches, permissions
    */
   async login(email, password) {
-    // Master user is the source of truth for credentials and tenant mapping
-    const masterUser = await masterPrisma.user.findUnique({
-      where: { email }
-    });
-
-    if (!masterUser) {
-      throw new AuthenticationError('Invalid credentials', 'AUTH_001');
-    }
-
-    if (!masterUser.isActive) {
-      throw new AuthenticationError('Account is deactivated', 'AUTH_001');
-    }
-
-    if (!masterUser.isVerified) {
-      throw new AuthenticationError('Please verify OTP before login', 'AUTH_OTP');
-    }
-
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, masterUser.password);
-    if (!isValidPassword) {
-      throw new AuthenticationError('Invalid credentials', 'AUTH_001');
-    }
-
-    // Resolve tenant DB (fallback to master DB for existing/demo users)
-    const masterUrl = process.env.DATABASE_URL;
-    const masterDbName = parseMysqlUrl(masterUrl).database;
-    const tenantDbName = masterUser.tenantDb || masterDbName;
-    const tenantUrl = buildTenantDatabaseUrl(masterUrl, tenantDbName);
-
-    const tenantPrisma = getTenantPrismaByDbName(tenantDbName);
-
-    // Find tenant user with branch access and shop info
-    const user = await tenantPrisma.user.findUnique({
+    // Find user in system database
+    const systemUser = await systemPrisma.systemUser.findUnique({
       where: { email },
       include: {
-        branchAccess: {
-          where: { isActive: true },
-          include: {
-            branch: {
-              include: {
-                shop: true
-              }
-            }
-          }
-        },
-        ownedShops: true
+        company: true
       }
     });
 
-    if (!user) {
-      // Tenant DB not provisioned correctly
-      throw new AuthenticationError('Account tenant is not ready', 'AUTH_002');
+    if (!systemUser) {
+      throw new AuthenticationError('Invalid email or password', 'AUTH_001');
     }
 
-    if (!user.isActive) {
-      throw new AuthenticationError('Account is deactivated', 'AUTH_001');
+    if (systemUser.status === 'inactive' || systemUser.status === 'suspended') {
+      throw new AuthenticationError('Your account has been deactivated', 'AUTH_002');
     }
 
-    // Generate token
-    const accessToken = this.generateToken(user.id);
+    if (systemUser.status === 'pending') {
+      throw new AuthenticationError('Please verify your account first', 'AUTH_OTP');
+    }
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, systemUser.password);
+    if (!isValidPassword) {
+      throw new AuthenticationError('Invalid email or password', 'AUTH_001');
+    }
+
+    // Get company and tenant data
+    const company = systemUser.company;
+    if (!company) {
+      throw new AppError('No company associated with this account', 400, 'AUTH_003');
+    }
+
+    if (company.status === 'inactive' || company.status === 'suspended') {
+      throw new AppError('Your company account has been suspended', 403, 'AUTH_004');
+    }
+
+    // Get tenant database connection
+    const tenantPrisma = getTenantPrisma(company.tenantDb);
+
+    // Get branches user has access to
+    const branchUsers = await tenantPrisma.branchUser.findMany({
+      where: {
+        systemUserId: systemUser.id,
+        isActive: true
+      },
+      include: {
+        branch: true
+      }
+    });
+
+    // If master user, get all branches
+    let branches = [];
+    if (systemUser.isMaster) {
+      const allBranches = await tenantPrisma.branch.findMany({
+        where: { isActive: true },
+        orderBy: { isMain: 'desc' }
+      });
+      branches = allBranches.map(branch => ({
+        id: branch.id,
+        name: branch.name,
+        code: branch.code,
+        address: branch.address,
+        city: branch.city,
+        phone: branch.phone,
+        is_active: branch.isActive,
+        is_main: branch.isMain,
+        role: 'owner'
+      }));
+    } else {
+      branches = branchUsers.map(bu => ({
+        id: bu.branch.id,
+        name: bu.branch.name,
+        code: bu.branch.code,
+        address: bu.branch.address,
+        city: bu.branch.city,
+        phone: bu.branch.phone,
+        is_active: bu.branch.isActive,
+        is_main: bu.branch.isMain,
+        role_id: bu.roleId
+      }));
+    }
+
+    // Auto-select default branch (main branch or first branch)
+    let defaultBranchId = null;
+    const mainBranch = branches.find(b => b.is_main);
+    if (mainBranch) {
+      defaultBranchId = mainBranch.id;
+    } else if (branches.length > 0) {
+      defaultBranchId = branches[0].id;
+    }
+
+    // Get user's role and permissions
+    let permissions = [];
+    let roleId = null;
+    
+    if (systemUser.isMaster) {
+      // Master user has all permissions
+      permissions = await this.getAllPermissions();
+      roleId = 'master';
+    } else if (branchUsers.length > 0) {
+      // Get permissions from first branch's role
+      roleId = branchUsers[0].roleId;
+      permissions = await this.getPermissionsByRoleId(roleId);
+    }
+
+    // Generate JWT token
+    const accessToken = this.generateToken({
+      userId: systemUser.id,
+      companyId: company.id,
+      tenantDb: company.tenantDb,
+      isMaster: systemUser.isMaster,
+      default_branch_id: defaultBranchId
+    });
     const expiresIn = this.getExpiresInSeconds();
 
-    // Save token
-    await masterPrisma.token.create({
+    // Save token to system database
+    await systemPrisma.token.create({
       data: {
-        userId: user.id,
+        userId: systemUser.id,
         token: accessToken,
         type: 'access',
         expiresAt: new Date(Date.now() + expiresIn * 1000)
@@ -85,210 +148,227 @@ class AuthService {
     });
 
     // Update last login
-    await Promise.all([
-      masterPrisma.user.update({
-        where: { id: masterUser.id },
-        data: { lastLoginAt: new Date() }
-      }),
-      tenantPrisma.user.update({
-        where: { id: user.id },
-        data: { lastLoginAt: new Date() }
-      })
-    ]);
+    await systemPrisma.systemUser.update({
+      where: { id: systemUser.id },
+      data: { lastLoginAt: new Date() }
+    });
 
-    // Group branches by shop
-    const shopMap = new Map();
-    
-    // Add owned shops first
-    for (const shop of user.ownedShops) {
-      shopMap.set(shop.id, {
-        id: shop.id,
-        name: shop.name,
-        slug: shop.slug,
-        logo: shop.logo,
-        is_active: shop.isActive,
-        is_ecom_enabled: shop.isEcomEnabled,
-        branches: []
-      });
-    }
-    
-    // Add branches with access
-    for (const access of user.branchAccess) {
-      const shop = access.branch.shop;
-      if (!shopMap.has(shop.id)) {
-        shopMap.set(shop.id, {
-          id: shop.id,
-          name: shop.name,
-          slug: shop.slug,
-          logo: shop.logo,
-          is_active: shop.isActive,
-          is_ecom_enabled: shop.isEcomEnabled,
-          branches: []
-        });
-      }
-      
-      shopMap.get(shop.id).branches.push({
-        id: access.branch.id,
-        name: access.branch.name,
-        code: access.branch.code,
-        address: access.branch.address,
-        city: access.branch.city,
-        phone: access.branch.phone,
-        is_active: access.branch.isActive,
-        is_main: access.branch.isMain,
-        role: access.role
-      });
-    }
-
-    // Get permissions based on first branch role (or owner if owns shops)
-    const primaryRole = user.ownedShops.length > 0 ? 'owner' : 
-      (user.branchAccess[0]?.role || 'cashier');
-    const permissions = rolePermissions[primaryRole] || [];
-
-    // Structure response as per master contract with shops array
     return {
       user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        avatar: user.avatar,
-        is_active: user.isActive
+        id: systemUser.id,
+        name: systemUser.name,
+        email: systemUser.email,
+        phone: systemUser.phone,
+        avatar: systemUser.avatar,
+        is_master: systemUser.isMaster,
+        status: systemUser.status
       },
+      company: {
+        id: company.id,
+        name: company.name,
+        slug: company.slug,
+        logo: company.logo,
+        status: company.status
+      },
+      branches,
+      permissions,
+      role_id: roleId,
       token: accessToken,
       token_type: 'Bearer',
       expires_in: expiresIn,
-      shops: Array.from(shopMap.values()),
-      permissions
+      default_branch_id: defaultBranchId
     };
   }
 
   /**
-   * Register new user and create OTP (no tenant provisioning here)
+   * Register new user and company
+   * @param {object} userData - Registration data
+   * @returns {object} Registration response
    */
   async register(userData) {
-    // masterPrisma already imported at top level
-    const { email, password, name, phone } = userData;
+    const { email, password, name, phone, company_name } = userData;
 
-    // Create user in master (not verified)
+    // Check if email already exists
+    const existingUser = await systemPrisma.systemUser.findUnique({
+      where: { email }
+    });
+
+    if (existingUser) {
+      throw new AppError('Email already registered', 409, 'AUTH_005');
+    }
+
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, bcryptConfig.saltRounds);
 
-    const existing = await masterPrisma.user.findUnique({ where: { email } });
-    if (existing) {
-      throw new AppError('Email already exists', 409, 'AUTH_003');
-    }
+    // Generate company slug
+    const slug = this.generateSlug(company_name || name);
 
-    const user = await masterPrisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        phone: phone || null,
-        isActive: true,
-        isVerified: false
-      }
+    // Check if slug exists
+    const existingCompany = await systemPrisma.company.findUnique({
+      where: { slug }
     });
 
-    const otp = this.generateOtp();
-    await masterPrisma.userOtp.create({
-      data: {
-        userId: user.id,
-        code: otp,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
-      }
-    });
-
-    // TODO: integrate SMS/email provider. For now, log OTP in dev.
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`[OTP] user=${user.id} email=${user.email} otp=${otp}`);
+    if (existingCompany) {
+      throw new AppError('Company name already taken', 409, 'AUTH_006');
     }
 
-    return { user_id: user.id, otp_sent_to: 'email' };
+    // Create user and company in transaction
+    const result = await systemPrisma.$transaction(async (tx) => {
+      // Create company first (without tenant_db, will be set after OTP verification)
+      const tempTenantDb = `pending_${Date.now()}`;
+      const company = await tx.company.create({
+        data: {
+          name: company_name || `${name}'s Company`,
+          slug,
+          email,
+          phone,
+          tenantDb: tempTenantDb,
+          status: 'trial',
+          trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days trial
+        }
+      });
+
+      // Create user
+      const user = await tx.systemUser.create({
+        data: {
+          companyId: company.id,
+          email,
+          password: hashedPassword,
+          name,
+          phone,
+          status: 'pending',
+          isMaster: true // First user is always master
+        }
+      });
+
+      // Generate OTP
+      const otp = this.generateOtp();
+      await tx.userOtp.create({
+        data: {
+          userId: user.id,
+          code: otp,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+        }
+      });
+
+      // TODO: Send OTP via email/SMS
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[OTP] user=${user.id} email=${user.email} otp=${otp}`);
+      }
+
+      return { user, company, otp };
+    });
+
+    return {
+      user_id: result.user.id,
+      email: result.user.email,
+      otp_sent_to: 'email',
+      message: 'Please verify your email with the OTP sent'
+    };
   }
 
   /**
-   * Generate a 6-digit OTP
-   */
-  generateOtp() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  /**
-   * Verify OTP and provision tenant DB
+   * Verify OTP and provision tenant database
+   * @param {number} userId - User ID
+   * @param {string} otp - OTP code
+   * @returns {object} Verification response
    */
   async verifyOtp(userId, otp) {
-    // masterPrisma already imported at top level
     const id = parseInt(userId);
 
-    const user = await masterPrisma.user.findUnique({ where: { id } });
+    // Get user with company
+    const user = await systemPrisma.systemUser.findUnique({
+      where: { id },
+      include: { company: true }
+    });
+
     if (!user) {
       throw new NotFoundError('User');
     }
 
-    const latestOtp = await masterPrisma.userOtp.findFirst({
+    // Get latest OTP
+    const latestOtp = await systemPrisma.userOtp.findFirst({
       where: { userId: id, consumedAt: null },
       orderBy: { createdAt: 'desc' }
     });
 
     if (!latestOtp) {
-      throw new AppError('OTP not found', 422, 'AUTH_OTP');
+      throw new AppError('OTP not found. Please request a new one.', 422, 'AUTH_OTP_01');
     }
 
     if (latestOtp.expiresAt.getTime() < Date.now()) {
-      throw new AppError('OTP expired', 422, 'AUTH_OTP');
+      throw new AppError('OTP has expired. Please request a new one.', 422, 'AUTH_OTP_02');
     }
 
     if (latestOtp.attempts >= 5) {
-      throw new AppError('Too many OTP attempts', 429, 'AUTH_OTP');
+      throw new AppError('Too many failed attempts. Please request a new OTP.', 429, 'AUTH_OTP_03');
     }
 
     if (String(latestOtp.code) !== String(otp)) {
-      await masterPrisma.userOtp.update({
+      await systemPrisma.userOtp.update({
         where: { id: latestOtp.id },
         data: { attempts: latestOtp.attempts + 1 }
       });
-      throw new AppError('Invalid OTP', 422, 'AUTH_OTP');
+      throw new AppError('Invalid OTP', 422, 'AUTH_OTP_04');
     }
 
     // Consume OTP
-    await masterPrisma.userOtp.update({
+    await systemPrisma.userOtp.update({
       where: { id: latestOtp.id },
       data: { consumedAt: new Date() }
     });
 
-    // Provision tenant DB only once
-    let tenantDb = user.tenantDb;
-    if (!tenantDb) {
-      const provisioned = await tenantService.provisionTenantForUser(user);
-      tenantDb = provisioned.dbName;
-    }
+    // Provision tenant database
+    const tenantDbName = buildTenantDbName(user.companyId);
+    await this.provisionTenantDatabase(user, tenantDbName);
 
-    await masterPrisma.user.update({
-      where: { id: user.id },
-      data: {
-        isVerified: true,
-        tenantDb,
-        emailVerifiedAt: new Date()
+    // Update user and company status
+    await systemPrisma.$transaction([
+      systemPrisma.systemUser.update({
+        where: { id: user.id },
+        data: {
+          status: 'active',
+          emailVerifiedAt: new Date()
+        }
+      }),
+      systemPrisma.company.update({
+        where: { id: user.companyId },
+        data: {
+          tenantDb: tenantDbName,
+          status: 'active'
+        }
+      })
+    ]);
+
+    return {
+      verified: true,
+      message: 'Account verified successfully. You can now login.',
+      company: {
+        id: user.companyId,
+        tenant_db: tenantDbName
       }
-    });
-
-    return { verified: true, tenant: { db: tenantDb } };
+    };
   }
 
   /**
    * Resend OTP
+   * @param {number} userId - User ID
+   * @returns {object} Response
    */
   async resendOtp(userId) {
-    // masterPrisma already imported at top level
     const id = parseInt(userId);
 
-    const user = await masterPrisma.user.findUnique({ where: { id } });
+    const user = await systemPrisma.systemUser.findUnique({
+      where: { id }
+    });
+
     if (!user) {
       throw new NotFoundError('User');
     }
 
+    // Generate new OTP
     const otp = this.generateOtp();
-    await masterPrisma.userOtp.create({
+    await systemPrisma.userOtp.create({
       data: {
         userId: user.id,
         code: otp,
@@ -296,19 +376,24 @@ class AuthService {
       }
     });
 
+    // TODO: Send OTP via email/SMS
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[OTP] RESEND user=${user.id} email=${user.email} otp=${otp}`);
+      console.log(`[OTP RESEND] user=${user.id} email=${user.email} otp=${otp}`);
     }
 
-    return { sent: true };
+    return {
+      sent: true,
+      message: 'New OTP sent successfully'
+    };
   }
 
   /**
-   * Logout user and revoke token
+   * Logout user
+   * @param {string} token - Access token
+   * @returns {object} Response
    */
   async logout(token) {
-    // masterPrisma already imported at top level
-    await masterPrisma.token.updateMany({
+    await systemPrisma.token.updateMany({
       where: { token },
       data: { isRevoked: true }
     });
@@ -317,97 +402,222 @@ class AuthService {
   }
 
   /**
-   * Get current user details
+   * Get current user profile
+   * @param {object} tokenData - Decoded token data
+   * @returns {object} User profile
    */
-  async getCurrentUser(userId) {
-    // masterPrisma already imported at top level
-    const masterUser = await masterPrisma.user.findUnique({ where: { id: userId } });
-    if (!masterUser) {
+  async getCurrentUser(tokenData) {
+    const { userId, companyId, tenantDb } = tokenData;
+
+    // Get system user
+    const systemUser = await systemPrisma.systemUser.findUnique({
+      where: { id: userId },
+      include: { company: true }
+    });
+
+    if (!systemUser) {
       throw new NotFoundError('User');
     }
 
-    const masterUrl = process.env.DATABASE_URL;
-    const masterDbName = parseMysqlUrl(masterUrl).database;
-    const tenantDbName = masterUser.tenantDb || masterDbName;
-    const tenantPrisma = getTenantPrismaByDbName(tenantDbName);
+    // Get tenant data
+    const tenantPrisma = getTenantPrisma(tenantDb);
+    
+    // Get branch access
+    let branches = [];
+    let currentBranch = null;
+    let permissions = [];
 
-    const user = await tenantPrisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        branchAccess: {
-          where: { isActive: true },
-          include: {
-            branch: {
-              include: {
-                shop: true
-              }
-            }
-          }
+    if (systemUser.isMaster) {
+      const allBranches = await tenantPrisma.branch.findMany({
+        where: { isActive: true },
+        orderBy: { isMain: 'desc' }
+      });
+      branches = allBranches.map(b => ({
+        id: b.id,
+        name: b.name,
+        code: b.code,
+        is_main: b.isMain,
+        role: 'owner'
+      }));
+      currentBranch = branches.find(b => b.is_main) || branches[0];
+      permissions = await this.getAllPermissions();
+    } else {
+      const branchUsers = await tenantPrisma.branchUser.findMany({
+        where: {
+          systemUserId: userId,
+          isActive: true
         },
-        ownedShops: true
+        include: { branch: true }
+      });
+      branches = branchUsers.map(bu => ({
+        id: bu.branch.id,
+        name: bu.branch.name,
+        code: bu.branch.code,
+        is_main: bu.branch.isMain,
+        role_id: bu.roleId
+      }));
+      if (branchUsers.length > 0) {
+        const mainBranch = branchUsers.find(bu => bu.branch.isMain) || branchUsers[0];
+        currentBranch = branches.find(b => b.id === mainBranch.branchId);
+        permissions = await this.getPermissionsByRoleId(mainBranch.roleId);
       }
+    }
+
+    return {
+      user: {
+        id: systemUser.id,
+        name: systemUser.name,
+        email: systemUser.email,
+        phone: systemUser.phone,
+        avatar: systemUser.avatar,
+        is_master: systemUser.isMaster,
+        status: systemUser.status
+      },
+      company: {
+        id: systemUser.company.id,
+        name: systemUser.company.name,
+        logo: systemUser.company.logo
+      },
+      branches,
+      current_branch: currentBranch,
+      permissions
+    };
+  }
+
+  /**
+   * Select branch for current session
+   * @param {object} tokenData - Decoded token data
+   * @param {number} branchId - Branch ID
+   * @returns {object} Branch data with settings
+   */
+  async selectBranch(tokenData, branchId) {
+    const { userId, tenantDb } = tokenData;
+    const tenantPrisma = getTenantPrisma(tenantDb);
+
+    // Get branch
+    const branch = await tenantPrisma.branch.findUnique({
+      where: { id: parseInt(branchId) }
+    });
+
+    if (!branch) {
+      throw new NotFoundError('Branch');
+    }
+
+    if (!branch.isActive) {
+      throw new AppError('Branch is inactive', 400, 'BRANCH_001');
+    }
+
+    // Check access (skip for master users)
+    const systemUser = await systemPrisma.systemUser.findUnique({
+      where: { id: userId }
+    });
+
+    if (!systemUser.isMaster) {
+      const branchAccess = await tenantPrisma.branchUser.findFirst({
+        where: {
+          systemUserId: userId,
+          branchId: branch.id,
+          isActive: true
+        }
+      });
+
+      if (!branchAccess) {
+        throw new AppError('You do not have access to this branch', 403, 'BRANCH_002');
+      }
+    }
+
+    // Get branch settings
+    const settings = branch.settings || {
+      currency: 'PKR',
+      currency_symbol: 'Rs.',
+      tax_rate: 16,
+      tax_type: 'exclusive',
+      receipt_header: branch.name,
+      receipt_footer: 'Thank you for your visit!'
+    };
+
+    return {
+      branch: {
+        id: branch.id,
+        name: branch.name,
+        code: branch.code,
+        address: branch.address,
+        city: branch.city,
+        phone: branch.phone,
+        email: branch.email,
+        is_active: branch.isActive,
+        is_main: branch.isMain,
+        settings
+      }
+    };
+  }
+
+  /**
+   * Change password
+   * @param {number} userId - User ID
+   * @param {string} currentPassword - Current password
+   * @param {string} newPassword - New password
+   * @returns {object} Response
+   */
+  async changePassword(userId, currentPassword, newPassword) {
+    const user = await systemPrisma.systemUser.findUnique({
+      where: { id: userId }
     });
 
     if (!user) {
       throw new NotFoundError('User');
     }
 
-    const primaryRole = user.ownedShops.length > 0 ? 'owner' : 
-      (user.branchAccess[0]?.role || 'cashier');
-    const permissions = rolePermissions[primaryRole] || [];
-    const currentAccess = user.branchAccess[0];
-    const currentBranch = currentAccess?.branch || null;
+    // Verify current password
+    const isValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isValid) {
+      throw new AuthenticationError('Current password is incorrect', 'AUTH_007');
+    }
 
-    return {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: primaryRole,
-        avatar: user.avatar,
-        phone: user.phone,
-        is_active: user.isActive,
-        created_at: user.createdAt
-      },
-      current_branch: currentBranch ? {
-        id: currentBranch.id,
-        shop_id: currentBranch.shopId,
-        name: currentBranch.name,
-        code: currentBranch.code,
-        address: currentBranch.address,
-        city: currentBranch.city,
-        phone: currentBranch.phone,
-        is_active: currentBranch.isActive,
-        is_main: currentBranch.isMain,
-        settings: currentBranch.settings || {
-          currency: 'PKR',
-          currency_symbol: 'Rs.',
-          tax_rate: 16,
-          receipt_header: 'Welcome!',
-          receipt_footer: 'Thank you!'
-        }
-      } : null,
-      permissions
-    };
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, bcryptConfig.saltRounds);
+
+    // Update password and revoke all tokens
+    await systemPrisma.$transaction([
+      systemPrisma.systemUser.update({
+        where: { id: userId },
+        data: { password: hashedPassword }
+      }),
+      systemPrisma.token.updateMany({
+        where: { userId },
+        data: { isRevoked: true }
+      })
+    ]);
+
+    return { message: 'Password changed successfully' };
   }
 
   /**
    * Refresh access token
+   * @param {object} tokenData - Current token data
+   * @param {string} oldToken - Current token
+   * @returns {object} New token data
    */
-  async refreshToken(userId, oldToken) {
-    // masterPrisma already imported at top level
+  async refreshToken(tokenData, oldToken) {
+    const { userId, companyId, tenantDb, isMaster } = tokenData;
+
     // Revoke old token
-    await masterPrisma.token.updateMany({
+    await systemPrisma.token.updateMany({
       where: { token: oldToken },
       data: { isRevoked: true }
     });
 
     // Generate new token
-    const accessToken = this.generateToken(userId);
+    const accessToken = this.generateToken({
+      userId,
+      companyId,
+      tenantDb,
+      isMaster
+    });
     const expiresIn = this.getExpiresInSeconds();
 
     // Save new token
-    await masterPrisma.token.create({
+    await systemPrisma.token.create({
       data: {
         userId,
         token: accessToken,
@@ -417,153 +627,104 @@ class AuthService {
     });
 
     return {
-      // Keep both snake_case and camelCase for frontend compatibility
-      access_token: accessToken,
-      accessToken,
       token: accessToken,
       token_type: 'Bearer',
       expires_in: expiresIn
     };
   }
 
-  /**
-   * Select branch for current session
-   */
-  async selectBranch(userId, branchId) {
-    // masterPrisma already imported at top level
-    const masterUser = await masterPrisma.user.findUnique({ where: { id: userId } });
-    if (!masterUser) throw new NotFoundError('User');
-
-    const masterUrl = process.env.DATABASE_URL;
-    const masterDbName = parseMysqlUrl(masterUrl).database;
-    const tenantDbName = masterUser.tenantDb || masterDbName;
-    const prisma = getTenantPrismaByDbName(tenantDbName);
-
-    // Verify user has access to this branch
-    const userAccess = await prisma.userBranchAccess.findFirst({
-      where: {
-        userId,
-        branchId: parseInt(branchId),
-        isActive: true
-      },
-      include: {
-        branch: {
-          include: {
-            shop: true
-          }
-        }
-      }
-    });
-
-    if (!userAccess) {
-      throw new NotFoundError('Branch access not found');
-    }
-
-    if (!userAccess.branch.isActive) {
-      throw new AppError('Branch is inactive', 400, 'BRANCH_INACTIVE');
-    }
-
-    return {
-      branch: {
-        id: userAccess.branch.id,
-        shop_id: userAccess.branch.shopId,
-        name: userAccess.branch.name,
-        code: userAccess.branch.code,
-        address: userAccess.branch.address,
-        city: userAccess.branch.city,
-        phone: userAccess.branch.phone,
-        is_active: userAccess.branch.isActive,
-        is_main: userAccess.branch.isMain,
-        settings: userAccess.branch.settings || {
-          currency: 'PKR',
-          currency_symbol: 'Rs.',
-          tax_rate: 16,
-          receipt_header: 'Welcome!',
-          receipt_footer: 'Thank you!'
-        }
-      },
-      role: userAccess.role
-    };
-  }
-
-  /**
-   * Get public branches list for login page
-   */
-  async getPublicBranches() {
-    const branches = await masterPrisma.branch.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        name: true,
-        address: true
-      },
-      orderBy: { name: 'asc' }
-    });
-
-    return {
-      items: branches
-    };
-  }
-
-  /**
-   * Change password
-   */
-  async changePassword(userId, currentPassword, newPassword) {
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    });
-
-    if (!user) {
-      throw new NotFoundError('User');
-    }
-
-    // Verify current password
-    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
-    if (!isValidPassword) {
-      throw new AuthenticationError('Current password is incorrect', 'AUTH_001');
-    }
-
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, bcryptConfig.saltRounds);
-
-    // Update password
-    await prisma.user.update({
-      where: { id: userId },
-      data: { password: hashedPassword }
-    });
-
-    // Revoke all existing tokens
-    await prisma.token.updateMany({
-      where: { userId },
-      data: { isRevoked: true }
-    });
-
-    return { message: 'Password changed successfully' };
-  }
+  // ================== HELPER METHODS ==================
 
   /**
    * Generate JWT token
    */
-  generateToken(userId) {
-    return jwt.sign(
-      { userId },
-      jwtConfig.secret,
-      { expiresIn: jwtConfig.expiresIn }
-    );
+  generateToken(payload) {
+    return jwt.sign(payload, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
   }
 
   /**
-   * Get expiration time in seconds
+   * Get token expiration in seconds
    */
   getExpiresInSeconds() {
     const expiresIn = jwtConfig.expiresIn;
-    if (expiresIn.endsWith('h')) {
-      return parseInt(expiresIn) * 3600;
-    }
-    if (expiresIn.endsWith('d')) {
-      return parseInt(expiresIn) * 86400;
-    }
+    if (expiresIn.endsWith('h')) return parseInt(expiresIn) * 3600;
+    if (expiresIn.endsWith('d')) return parseInt(expiresIn) * 86400;
     return parseInt(expiresIn);
+  }
+
+  /**
+   * Generate 6-digit OTP
+   */
+  generateOtp() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  /**
+   * Generate URL-safe slug
+   */
+  generateSlug(text) {
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+      + '-' + Date.now().toString(36);
+  }
+
+  /**
+   * Get all permissions (for master users)
+   */
+  async getAllPermissions() {
+    const menus = await systemPrisma.systemMenu.findMany({
+      where: { isActive: true },
+      select: { code: true }
+    });
+
+    const permissions = [];
+    for (const menu of menus) {
+      permissions.push(
+        `${menu.code}.view`,
+        `${menu.code}.create`,
+        `${menu.code}.update`,
+        `${menu.code}.delete`,
+        `${menu.code}.export`,
+        `${menu.code}.print`
+      );
+    }
+    return permissions;
+  }
+
+  /**
+   * Get permissions by role ID
+   */
+  async getPermissionsByRoleId(roleId) {
+    const rolePermissions = await systemPrisma.rolePermission.findMany({
+      where: { roleId: parseInt(roleId) },
+      include: { menu: true }
+    });
+
+    const permissions = [];
+    for (const rp of rolePermissions) {
+      if (rp.canView) permissions.push(`${rp.menu.code}.view`);
+      if (rp.canCreate) permissions.push(`${rp.menu.code}.create`);
+      if (rp.canUpdate) permissions.push(`${rp.menu.code}.update`);
+      if (rp.canDelete) permissions.push(`${rp.menu.code}.delete`);
+      if (rp.canExport) permissions.push(`${rp.menu.code}.export`);
+      if (rp.canPrint) permissions.push(`${rp.menu.code}.print`);
+    }
+    return permissions;
+  }
+
+  /**
+   * Provision tenant database
+   */
+  async provisionTenantDatabase(user, tenantDbName) {
+    const tenantService = require('./tenant.service');
+    await tenantService.provisionTenantForCompany(user.companyId, tenantDbName, {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone
+    });
   }
 }
 

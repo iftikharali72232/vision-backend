@@ -216,6 +216,22 @@ class ReportController {
   }
 
   /**
+   * Customer report
+   * GET /reports/customers
+   */
+  async customers(req, res, next) {
+    try {
+      const data = await reportService.getCustomerReport(req.query, req.branchId);
+      res.json({
+        success: true,
+        data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Balance Sheet report
    * GET /reports/balance-sheet
    */

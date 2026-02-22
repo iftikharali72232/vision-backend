@@ -65,8 +65,20 @@ router.get(
 router.post(
   '/',
   hasPermission('products', 'create'),
+  requireBranch,
   validate(productValidation.createProduct),
   productController.store
+);
+
+/**
+ * @route GET /api/v1/products/categories
+ * @desc List categories (alias for /categories)
+ * @access Private - All roles
+ * NOTE: Must be before /:id to avoid matching 'categories' as a product id
+ */
+router.get(
+  '/categories',
+  categoryController.index
 );
 
 /**
@@ -76,6 +88,7 @@ router.post(
  */
 router.get(
   '/:id',
+  requireBranch,
   validate(productValidation.getProductById),
   productController.show
 );
@@ -87,7 +100,8 @@ router.get(
  */
 router.put(
   '/:id',
-  hasPermission('products', 'update'),
+  hasPermission('products', 'edit'),
+  requireBranch,
   validate(productValidation.updateProduct),
   productController.update
 );
@@ -100,6 +114,7 @@ router.put(
 router.delete(
   '/:id',
   hasPermission('products', 'delete'),
+  requireBranch,
   validate(productValidation.deleteProduct),
   productController.destroy
 );
@@ -118,13 +133,42 @@ router.put(
 );
 
 /**
- * @route GET /api/v1/products/categories
- * @desc List categories (alias for /categories)
- * @access Private - All roles
+ * @route POST /api/v1/products/:id/variations
+ * @desc Add a variation to a product
+ * @access Private - Admin, Manager
  */
-router.get(
-  '/categories',
-  categoryController.index
+router.post(
+  '/:id/variations',
+  hasPermission('products', 'edit'),
+  requireBranch,
+  validate(productValidation.addVariation),
+  productController.addVariation
+);
+
+/**
+ * @route PUT /api/v1/products/:id/variations/:variationId
+ * @desc Update a product variation
+ * @access Private - Admin, Manager
+ */
+router.put(
+  '/:id/variations/:variationId',
+  hasPermission('products', 'edit'),
+  requireBranch,
+  validate(productValidation.updateVariation),
+  productController.updateVariation
+);
+
+/**
+ * @route DELETE /api/v1/products/:id/variations/:variationId
+ * @desc Delete a product variation
+ * @access Private - Admin, Manager
+ */
+router.delete(
+  '/:id/variations/:variationId',
+  hasPermission('products', 'edit'),
+  requireBranch,
+  validate(productValidation.deleteVariation),
+  productController.deleteVariation
 );
 
 module.exports = router;

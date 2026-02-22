@@ -1,4 +1,5 @@
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { NotFoundError, AppError } = require('../middlewares/errorHandler');
 
 class MenuService {

@@ -1,17 +1,27 @@
+/**
+ * User Controller
+ * Handles all user-related HTTP requests for multi-tenant system
+ */
+
 const userService = require('../services/user.service');
 
 class UserController {
   /**
-   * List users
+   * Get all users
    * GET /users
    */
-  async index(req, res, next) {
+  async getUsers(req, res, next) {
     try {
-      const data = await userService.getUsers(req.query);
+      const data = await userService.getUsers(
+        req.user.companyId,
+        req.tenantDb,
+        req.query
+      );
 
       res.json({
         success: true,
-        data
+        data: data.items,
+        pagination: data.pagination
       });
     } catch (error) {
       next(error);
@@ -22,9 +32,13 @@ class UserController {
    * Get user by ID
    * GET /users/:id
    */
-  async show(req, res, next) {
+  async getUserById(req, res, next) {
     try {
-      const data = await userService.getUserById(req.params.id);
+      const data = await userService.getUserById(
+        req.user.companyId,
+        req.tenantDb,
+        req.params.id
+      );
 
       res.json({
         success: true,
@@ -36,12 +50,16 @@ class UserController {
   }
 
   /**
-   * Create user
+   * Create new user
    * POST /users
    */
-  async store(req, res, next) {
+  async createUser(req, res, next) {
     try {
-      const data = await userService.createUser(req.body);
+      const data = await userService.createUser(
+        req.user.companyId,
+        req.tenantDb,
+        req.body
+      );
 
       res.status(201).json({
         success: true,
@@ -57,9 +75,14 @@ class UserController {
    * Update user
    * PUT /users/:id
    */
-  async update(req, res, next) {
+  async updateUser(req, res, next) {
     try {
-      const data = await userService.updateUser(req.params.id, req.body);
+      const data = await userService.updateUser(
+        req.user.companyId,
+        req.tenantDb,
+        req.params.id,
+        req.body
+      );
 
       res.json({
         success: true,
@@ -75,9 +98,13 @@ class UserController {
    * Delete user
    * DELETE /users/:id
    */
-  async destroy(req, res, next) {
+  async deleteUser(req, res, next) {
     try {
-      await userService.deleteUser(req.params.id);
+      await userService.deleteUser(
+        req.user.companyId,
+        req.tenantDb,
+        req.params.id
+      );
 
       res.json({
         success: true,
@@ -94,12 +121,57 @@ class UserController {
    */
   async resetPassword(req, res, next) {
     try {
-      const { new_password } = req.body;
-      await userService.resetPassword(req.params.id, new_password);
+      await userService.resetPassword(
+        req.user.companyId,
+        req.params.id,
+        req.body.newPassword
+      );
 
       res.json({
         success: true,
         message: 'Password reset successfully'
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Toggle user status
+   * POST /users/:id/toggle-status
+   */
+  async toggleUserStatus(req, res, next) {
+    try {
+      const data = await userService.toggleUserStatus(
+        req.user.companyId,
+        req.params.id
+      );
+
+      res.json({
+        success: true,
+        message: `User ${data.status === 'ACTIVE' ? 'activated' : 'deactivated'} successfully`,
+        data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get user permissions
+   * GET /users/:id/permissions
+   */
+  async getUserPermissions(req, res, next) {
+    try {
+      const data = await userService.getUserPermissions(
+        req.user.companyId,
+        req.tenantDb,
+        req.params.id
+      );
+
+      res.json({
+        success: true,
+        data
       });
     } catch (error) {
       next(error);

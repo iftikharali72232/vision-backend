@@ -1,9 +1,26 @@
 const { Prisma } = require('@prisma/client');
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { pagination: paginationConfig } = require('../config/constants');
 const { NotFoundError, ConflictError } = require('../middlewares/errorHandler');
 
 class ProductService {
+  normalizeUnit(unit) {
+    if (unit === undefined || unit === null || unit === '') return undefined;
+    const normalized = String(unit).toLowerCase();
+    if (normalized === 'piece') return 'pieces';
+    if (normalized === 'liter') return 'liters';
+    return normalized;
+  }
+
+  denormalizeUnit(unit) {
+    if (unit === undefined || unit === null || unit === '') return undefined;
+    const normalized = String(unit).toLowerCase();
+    if (normalized === 'pieces') return 'piece';
+    if (normalized === 'liters') return 'liter';
+    return normalized;
+  }
+
   /**
    * Get paginated list of products
    */
@@ -211,7 +228,7 @@ class ProductService {
    * Get product by barcode
    */
   async getProductByBarcode(barcode, branchId) {
-    const product = await prisma.product.findFirst({
+    let product = await prisma.product.findFirst({
       where: { 
         barcode,
         branchId: parseInt(branchId),
@@ -233,7 +250,7 @@ class ProductService {
 
     if (!product) {
       // Check variations for barcode
-      const variation = await prisma.productVariation.findFirst({
+      let variation = await prisma.productVariation.findFirst({
         where: {
           barcode,
           isActive: true,
@@ -261,13 +278,68 @@ class ProductService {
       });
 
       if (!variation) {
-        throw new NotFoundError('Product');
+        // Fallback: search by SKU in products
+        product = await prisma.product.findFirst({
+          where: { 
+            sku: barcode,
+            branchId: parseInt(branchId),
+            isActive: true
+          },
+          include: {
+            category: { select: { id: true, name: true, color: true, icon: true } },
+            variations: {
+              where: { isActive: true },
+              orderBy: { displayOrder: 'asc' }
+            },
+            modifiers: {
+              include: {
+                options: true
+              }
+            }
+          }
+        });
+
+        if (!product) {
+          // Fallback: search by SKU in variations
+          variation = await prisma.productVariation.findFirst({
+            where: {
+              sku: barcode,
+              isActive: true,
+              product: {
+                branchId: parseInt(branchId),
+                isActive: true
+              }
+            },
+            include: {
+              product: {
+                include: {
+                  category: { select: { id: true, name: true, color: true, icon: true } },
+                  variations: {
+                    where: { isActive: true },
+                    orderBy: { displayOrder: 'asc' }
+                  },
+                  modifiers: {
+                    include: {
+                      options: true
+                    }
+                  }
+                }
+              }
+            }
+          });
+
+          if (!variation) {
+            throw new NotFoundError('Product');
+          }
+        }
       }
 
-      return {
-        ...this.formatProductForPOS(variation.product),
-        selected_variation_id: variation.id
-      };
+      if (variation) {
+        return {
+          ...this.formatProductForPOS(variation.product),
+          selected_variation_id: variation.id
+        };
+      }
     }
 
     return this.formatProductForPOS(product);
@@ -332,6 +404,7 @@ class ProductService {
         sku: data.sku,
         barcode: data.barcode || null,
         description: data.description || null,
+        unit: this.normalizeUnit(data.unit) || 'pieces',
         basePrice: data.base_price || data.selling_price,
         sellingPrice: data.selling_price,
         costPrice: data.cost_price || 0,
@@ -452,6 +525,7 @@ class ProductService {
     if (data.sku !== undefined) updateData.sku = data.sku;
     if (data.barcode !== undefined) updateData.barcode = data.barcode;
     if (data.description !== undefined) updateData.description = data.description;
+    if (data.unit !== undefined) updateData.unit = this.normalizeUnit(data.unit);
     if (data.base_price !== undefined) updateData.basePrice = data.base_price;
     if (data.selling_price !== undefined) updateData.sellingPrice = data.selling_price;
     if (data.cost_price !== undefined) updateData.costPrice = data.cost_price;
@@ -878,6 +952,8 @@ class ProductService {
       selling_price: Number(product.sellingPrice),
       cost_price: Number(product.costPrice),
       tax_rate: Number(product.taxRate),
+      is_taxable: Number(product.taxRate) > 0,
+      unit: this.denormalizeUnit(product.unit),
       has_variations: product.hasVariations,
       track_stock: product.trackStock,
       stock_quantity: product.stockQuantity,
@@ -907,6 +983,8 @@ class ProductService {
       category: product.category,
       selling_price: Number(product.sellingPrice),
       tax_rate: Number(product.taxRate),
+      is_taxable: Number(product.taxRate) > 0,
+      unit: this.denormalizeUnit(product.unit),
       has_variations: product.hasVariations,
       stock_quantity: product.stockQuantity,
       image: product.image,

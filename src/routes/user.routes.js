@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const userController = require('../controllers/user.controller.new');
-const { authenticate, requirePermission } = require('../middlewares/auth.new');
+const userController = require('../controllers/user.controller');
+const { authenticate, requirePermission } = require('../middlewares/auth');
 const validate = require('../middlewares/validate');
 const userValidation = require('../validations/user.validation');
 
@@ -78,6 +78,17 @@ router.post(
   requirePermission('users.update'),
   validate(userValidation.resetPassword),
   userController.resetPassword
+);
+
+/**
+ * @route POST /api/v1/users/:id/toggle-status
+ * @desc Toggle user active/inactive status
+ * @access Private - Admin
+ */
+router.post(
+  '/:id/toggle-status',
+  requirePermission('users.update'),
+  userController.toggleUserStatus
 );
 
 module.exports = router;

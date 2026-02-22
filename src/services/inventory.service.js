@@ -1,8 +1,17 @@
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { pagination: paginationConfig } = require('../config/constants');
 const { NotFoundError, AppError } = require('../middlewares/errorHandler');
 
 class InventoryService {
+  denormalizeUnit(unit) {
+    if (unit === undefined || unit === null || unit === '') return undefined;
+    const normalized = String(unit).toLowerCase();
+    if (normalized === 'pieces') return 'piece';
+    if (normalized === 'liters') return 'liter';
+    return normalized;
+  }
+
   // ==================== STOCK MANAGEMENT ====================
 
   /**
@@ -20,11 +29,14 @@ class InventoryService {
       sort_order = 'asc'
     } = query;
 
-    const skip = (page - 1) * per_page;
-    const take = Math.min(per_page, paginationConfig.maxPerPage);
+    const numericPerPage = parseInt(per_page) || 20;
+    const numericPage = parseInt(page) || 1;
+    const skip = (numericPage - 1) * numericPerPage;
+    const take = Math.min(numericPerPage, paginationConfig.maxPerPage);
+    const numericBranchId = parseInt(branchId);
 
     const where = {
-      branchId,
+      branchId: numericBranchId,
       trackStock: true
     };
 
@@ -45,7 +57,7 @@ class InventoryService {
       where,
       include: {
         category: { select: { id: true, name: true } },
-        stocks: { where: { branchId } }
+        stocks: { where: { branchId: numericBranchId } }
       }
     });
 
@@ -53,21 +65,26 @@ class InventoryService {
     let items = products.map(product => {
       const stock = product.stocks[0];
       const stockQty = stock?.stockQuantity || 0;
-      const minLevel = stock?.minStockLevel || 10;
-      
+      const minLevel = product.lowStockThreshold || 10;
+
       return {
         id: product.id,
         name: product.name,
         sku: product.sku,
         barcode: product.barcode,
         category: product.category,
+        unit: this.denormalizeUnit(product.unit),
+        image_url: product.image,
         cost_price: Number(product.costPrice),
+        selling_price: Number(product.sellingPrice),
         stock_quantity: stockQty,
+        min_stock: minLevel,
         min_stock_level: minLevel,
         max_stock_level: stock?.maxStockLevel,
-        reorder_point: stock?.reorderPoint || minLevel,
+        reorder_point: minLevel,
         status: stockQty === 0 ? 'out_of_stock' : stockQty <= minLevel ? 'low_stock' : 'in_stock',
-        stock_value: stockQty * Number(product.costPrice)
+        stock_value: stockQty * Number(product.costPrice),
+        created_at: product.createdAt
       };
     });
 
@@ -91,31 +108,33 @@ class InventoryService {
           comparison = a.stock_value - b.stock_value;
           break;
         default:
-          comparison = a.name.localeCompare(b.name);
+          comparison = (a.name || '').localeCompare(b.name || '');
       }
       return sort_order === 'desc' ? -comparison : comparison;
     });
 
-    // Paginate
-    const total = items.length;
-    const paginatedItems = items.slice(skip, skip + take);
-
-    // Calculate summary
+    // Calculate summary from ALL items (before pagination)
     const summary = {
-      total_products: total,
+      total_products: items.length,
       total_stock_value: items.reduce((sum, i) => sum + i.stock_value, 0),
       low_stock_count: items.filter(i => i.status === 'low_stock').length,
       out_of_stock_count: items.filter(i => i.status === 'out_of_stock').length
     };
 
+    // Paginate
+    const total = items.length;
+    const paginatedItems = items.slice(skip, skip + take);
+
     return {
       items: paginatedItems,
       summary,
       pagination: {
-        current_page: parseInt(page),
+        current_page: numericPage,
         per_page: take,
         total_pages: Math.ceil(total / take),
-        total_items: total
+        last_page: Math.ceil(total / take),
+        total_items: total,
+        total
       }
     };
   }
@@ -124,16 +143,31 @@ class InventoryService {
    * Adjust stock quantity
    */
   async adjustStock(productId, data, userId, branchId) {
-    const {
-      adjustment_type, // 'set', 'add', 'subtract'
-      quantity,
-      reason,
-      notes,
-      unit_cost
-    } = data;
+    const adjustment_type = data?.adjustment_type ?? data?.type; // accept frontend alias
+    const quantity = data?.quantity;
+    const reason = data?.reason;
+    const notes = data?.notes;
+    const unit_cost = data?.unit_cost;
+
+    if (!adjustment_type) {
+      throw new AppError('Adjustment type is required', 400, 'INVALID_TYPE');
+    }
+
+    const numericQuantity = parseInt(quantity);
+    if (!Number.isFinite(numericQuantity) || numericQuantity < 0) {
+      throw new AppError('Quantity must be a non-negative integer', 400, 'INVALID_QUANTITY');
+    }
+
+    const numericBranchId = parseInt(branchId);
+    const numericProductId = parseInt(productId);
+    const numericUserId = userId ? parseInt(userId) : null;
+
+    if (!numericUserId) {
+      throw new AppError('User context is required for stock adjustments', 400, 'MISSING_USER');
+    }
 
     const product = await prisma.product.findUnique({
-      where: { id: parseInt(productId) }
+      where: { id: numericProductId }
     });
 
     if (!product) {
@@ -148,8 +182,8 @@ class InventoryService {
     let stock = await prisma.productStock.findUnique({
       where: {
         productId_branchId: {
-          productId: parseInt(productId),
-          branchId
+          productId: numericProductId,
+          branchId: numericBranchId
         }
       }
     });
@@ -157,10 +191,9 @@ class InventoryService {
     if (!stock) {
       stock = await prisma.productStock.create({
         data: {
-          productId: parseInt(productId),
-          branchId,
-          stockQuantity: 0,
-          minStockLevel: 10
+          product: { connect: { id: numericProductId } },
+          branch: { connect: { id: numericBranchId } },
+          stockQuantity: 0
         }
       });
     }
@@ -172,17 +205,17 @@ class InventoryService {
 
     switch (adjustment_type) {
       case 'set':
-        afterQty = quantity;
-        movementQty = Math.abs(quantity - beforeQty);
-        movementType = quantity > beforeQty ? 'in' : 'out';
+        afterQty = numericQuantity;
+        movementQty = Math.abs(numericQuantity - beforeQty);
+        movementType = 'adjustment';
         break;
       case 'add':
-        afterQty = beforeQty + quantity;
-        movementQty = quantity;
+        afterQty = beforeQty + numericQuantity;
+        movementQty = numericQuantity;
         movementType = 'in';
         break;
       case 'subtract':
-        afterQty = Math.max(0, beforeQty - quantity);
+        afterQty = Math.max(0, beforeQty - numericQuantity);
         movementQty = beforeQty - afterQty;
         movementType = 'out';
         break;
@@ -195,38 +228,45 @@ class InventoryService {
       await tx.productStock.update({
         where: {
           productId_branchId: {
-            productId: parseInt(productId),
-            branchId
+            productId: numericProductId,
+            branchId: numericBranchId
           }
         },
         data: { stockQuantity: afterQty }
       });
 
+      // Also update the denormalized stockQuantity on Product
+      await tx.product.update({
+        where: { id: numericProductId },
+        data: { stockQuantity: afterQty }
+      });
+
       await tx.inventoryMovement.create({
         data: {
-          branchId,
-          productId: parseInt(productId),
-          userId,
-          type: movementType === 'in' && movementType === 'out' ? 'adjustment' : movementType,
+          branch: { connect: { id: numericBranchId } },
+          product: { connect: { id: numericProductId } },
+          user: { connect: { id: numericUserId } },
+          type: movementType,
           reason: reason || 'correction',
           quantity: movementQty,
           quantityBefore: beforeQty,
           quantityAfter: afterQty,
-          unitCost: unit_cost || product.costPrice,
-          notes
+          unitCost: unit_cost ? parseFloat(unit_cost) : Number(product.costPrice) || null,
+          notes: notes || null
         }
       });
 
       // Check for low stock alert
-      if (afterQty <= stock.minStockLevel && afterQty > 0) {
-        await this.createStockAlert(tx, productId, branchId, 'low_stock', afterQty, stock.minStockLevel);
+      const minLevel = product.lowStockThreshold || 10;
+      if (afterQty <= minLevel && afterQty > 0) {
+        await this.createStockAlert(tx, numericProductId, numericBranchId, 'low_stock', afterQty, minLevel, product);
       } else if (afterQty === 0) {
-        await this.createStockAlert(tx, productId, branchId, 'out_of_stock', afterQty, stock.minStockLevel);
+        await this.createStockAlert(tx, numericProductId, numericBranchId, 'out_of_stock', afterQty, minLevel, product);
       }
     });
 
     return {
-      product_id: parseInt(productId),
+      product_id: numericProductId,
       product_name: product.name,
       before_quantity: beforeQty,
       after_quantity: afterQty,
@@ -272,12 +312,17 @@ class InventoryService {
       notes
     } = data;
 
-    if (sourceBranchId === target_branch_id) {
+    const numericSourceBranch = parseInt(sourceBranchId);
+    const numericTargetBranch = parseInt(target_branch_id);
+    const numericProductId = parseInt(product_id);
+    const numericUserId = parseInt(userId);
+
+    if (numericSourceBranch === numericTargetBranch) {
       throw new AppError('Cannot transfer to same branch', 400, 'SAME_BRANCH');
     }
 
     const product = await prisma.product.findUnique({
-      where: { id: parseInt(product_id) }
+      where: { id: numericProductId }
     });
 
     if (!product) {
@@ -288,8 +333,8 @@ class InventoryService {
     const sourceStock = await prisma.productStock.findUnique({
       where: {
         productId_branchId: {
-          productId: parseInt(product_id),
-          branchId: sourceBranchId
+          productId: numericProductId,
+          branchId: numericSourceBranch
         }
       }
     });
@@ -298,19 +343,17 @@ class InventoryService {
       throw new AppError('Insufficient stock for transfer', 400, 'INSUFFICIENT_STOCK');
     }
 
-    // Generate transfer reference
     const transferRef = `TRF-${Date.now()}`;
 
     await prisma.$transaction(async (tx) => {
-      // Deduct from source
       const sourceBeforeQty = sourceStock.stockQuantity;
       const sourceAfterQty = sourceBeforeQty - quantity;
 
       await tx.productStock.update({
         where: {
           productId_branchId: {
-            productId: parseInt(product_id),
-            branchId: sourceBranchId
+            productId: numericProductId,
+            branchId: numericSourceBranch
           }
         },
         data: { stockQuantity: sourceAfterQty }
@@ -318,17 +361,17 @@ class InventoryService {
 
       await tx.inventoryMovement.create({
         data: {
-          branchId: sourceBranchId,
-          productId: parseInt(product_id),
-          userId,
+          branch: { connect: { id: numericSourceBranch } },
+          product: { connect: { id: numericProductId } },
+          user: { connect: { id: numericUserId } },
           type: 'out',
           reason: 'transfer_out',
           quantity,
           quantityBefore: sourceBeforeQty,
           quantityAfter: sourceAfterQty,
-          unitCost: product.costPrice,
+          unitCost: Number(product.costPrice) || null,
           reference: transferRef,
-          notes: `Transfer to branch ${target_branch_id}: ${notes || ''}`
+          notes: `Transfer to branch ${numericTargetBranch}: ${notes || ''}`
         }
       });
 
@@ -336,8 +379,8 @@ class InventoryService {
       let targetStock = await tx.productStock.findUnique({
         where: {
           productId_branchId: {
-            productId: parseInt(product_id),
-            branchId: target_branch_id
+            productId: numericProductId,
+            branchId: numericTargetBranch
           }
         }
       });
@@ -348,43 +391,42 @@ class InventoryService {
       await tx.productStock.upsert({
         where: {
           productId_branchId: {
-            productId: parseInt(product_id),
-            branchId: target_branch_id
+            productId: numericProductId,
+            branchId: numericTargetBranch
           }
         },
         update: { stockQuantity: targetAfterQty },
         create: {
-          productId: parseInt(product_id),
-          branchId: target_branch_id,
-          stockQuantity: quantity,
-          minStockLevel: 10
+          product: { connect: { id: numericProductId } },
+          branch: { connect: { id: numericTargetBranch } },
+          stockQuantity: quantity
         }
       });
 
       await tx.inventoryMovement.create({
         data: {
-          branchId: target_branch_id,
-          productId: parseInt(product_id),
-          userId,
+          branch: { connect: { id: numericTargetBranch } },
+          product: { connect: { id: numericProductId } },
+          user: { connect: { id: numericUserId } },
           type: 'in',
           reason: 'transfer_in',
           quantity,
           quantityBefore: targetBeforeQty,
           quantityAfter: targetAfterQty,
-          unitCost: product.costPrice,
+          unitCost: Number(product.costPrice) || null,
           reference: transferRef,
-          notes: `Transfer from branch ${sourceBranchId}: ${notes || ''}`
+          notes: `Transfer from branch ${numericSourceBranch}: ${notes || ''}`
         }
       });
     });
 
     return {
       reference: transferRef,
-      product_id: parseInt(product_id),
+      product_id: numericProductId,
       product_name: product.name,
       quantity,
-      source_branch_id: sourceBranchId,
-      target_branch_id
+      source_branch_id: numericSourceBranch,
+      target_branch_id: numericTargetBranch
     };
   }
 
@@ -405,32 +447,22 @@ class InventoryService {
       user_id
     } = query;
 
-    const skip = (page - 1) * per_page;
-    const take = Math.min(per_page, paginationConfig.maxPerPage);
+    const numericPage = parseInt(page) || 1;
+    const numericPerPage = parseInt(per_page) || 20;
+    const skip = (numericPage - 1) * numericPerPage;
+    const take = Math.min(numericPerPage, paginationConfig.maxPerPage);
+    const numericBranchId = parseInt(branchId);
 
-    const where = { branchId };
+    const where = { branchId: numericBranchId };
 
-    if (product_id) {
-      where.productId = parseInt(product_id);
-    }
-
-    if (type) {
-      where.type = type;
-    }
-
-    if (reason) {
-      where.reason = reason;
-    }
-
-    if (user_id) {
-      where.userId = parseInt(user_id);
-    }
+    if (product_id) where.productId = parseInt(product_id);
+    if (type) where.type = type;
+    if (reason) where.reason = reason;
+    if (user_id) where.userId = parseInt(user_id);
 
     if (date_from || date_to) {
       where.createdAt = {};
-      if (date_from) {
-        where.createdAt.gte = new Date(date_from);
-      }
+      if (date_from) where.createdAt.gte = new Date(date_from);
       if (date_to) {
         const endDate = new Date(date_to);
         endDate.setHours(23, 59, 59, 999);
@@ -455,7 +487,10 @@ class InventoryService {
     const items = movements.map(m => ({
       id: m.id,
       product: m.product,
+      product_name: m.product?.name,
+      sku: m.product?.sku,
       user: m.user,
+      created_by: m.user?.name,
       type: m.type,
       reason: m.reason,
       quantity: m.quantity,
@@ -470,10 +505,11 @@ class InventoryService {
     return {
       items,
       pagination: {
-        current_page: parseInt(page),
+        current_page: numericPage,
         per_page: take,
         total_pages: Math.ceil(total / take),
-        total_items: total
+        total_items: total,
+        total
       }
     };
   }
@@ -482,8 +518,9 @@ class InventoryService {
    * Get movement details
    */
   async getMovementById(id, branchId) {
+    const numericBranchId = parseInt(branchId);
     const movement = await prisma.inventoryMovement.findFirst({
-      where: { id: parseInt(id), branchId },
+      where: { id: parseInt(id), branchId: numericBranchId },
       include: {
         product: { select: { id: true, name: true, sku: true, barcode: true } },
         user: { select: { id: true, name: true } },
@@ -520,20 +557,12 @@ class InventoryService {
    */
   async getStockAlerts(query, branchId) {
     const { status = 'active', product_id, alert_type } = query;
+    const numericBranchId = parseInt(branchId);
 
-    const where = { branchId };
-
-    if (status) {
-      where.status = status;
-    }
-
-    if (product_id) {
-      where.productId = parseInt(product_id);
-    }
-
-    if (alert_type) {
-      where.alertType = alert_type;
-    }
+    const where = { branchId: numericBranchId };
+    if (status) where.status = status;
+    if (product_id) where.productId = parseInt(product_id);
+    if (alert_type) where.alertType = alert_type;
 
     const alerts = await prisma.stockAlert.findMany({
       where,
@@ -544,26 +573,27 @@ class InventoryService {
             id: true,
             name: true,
             sku: true,
-            stocks: { where: { branchId } }
+            lowStockThreshold: true,
+            stocks: { where: { branchId: numericBranchId } }
           }
         }
       }
     });
 
+    // Format to match the LowStockAlert component expectations
     return alerts.map(alert => ({
       id: alert.id,
-      product: {
-        id: alert.product.id,
-        name: alert.product.name,
-        sku: alert.product.sku,
-        current_stock: alert.product.stocks[0]?.stockQuantity || 0
-      },
-      alert_type: alert.alertType,
-      current_quantity: alert.currentQuantity,
-      threshold_quantity: alert.thresholdQuantity,
+      product_id: alert.productId,
+      product_name: alert.productName || alert.product?.name,
+      sku: alert.sku || alert.product?.sku,
+      current_stock: alert.product?.stocks?.[0]?.stockQuantity ?? alert.currentStock,
+      min_stock: alert.minStock || alert.product?.lowStockThreshold || 10,
+      reorder_quantity: alert.reorderQuantity || null,
+      alert_type: alert.alertType || (alert.currentStock === 0 ? 'out_of_stock' : 'low_stock'),
       status: alert.status,
       dismissed_at: alert.dismissedAt,
-      created_at: alert.createdAt
+      created_at: alert.createdAt,
+      last_restocked: null
     }));
   }
 
@@ -571,8 +601,9 @@ class InventoryService {
    * Dismiss stock alert
    */
   async dismissAlert(id, branchId) {
+    const numericBranchId = parseInt(branchId);
     const alert = await prisma.stockAlert.findFirst({
-      where: { id: parseInt(id), branchId }
+      where: { id: parseInt(id), branchId: numericBranchId }
     });
 
     if (!alert) {
@@ -593,35 +624,34 @@ class InventoryService {
   /**
    * Create stock alert (internal)
    */
-  async createStockAlert(tx, productId, branchId, alertType, currentQty, thresholdQty) {
+  async createStockAlert(tx, productId, branchId, alertType, currentQty, thresholdQty, product) {
+    const numericProductId = parseInt(productId);
     // Check if similar active alert exists
     const existing = await tx.stockAlert.findFirst({
       where: {
-        productId: parseInt(productId),
+        productId: numericProductId,
         branchId,
-        alertType,
         status: 'active'
       }
     });
 
     if (existing) {
-      // Update existing alert
       await tx.stockAlert.update({
         where: { id: existing.id },
         data: {
-          currentQuantity: currentQty,
-          thresholdQuantity: thresholdQty
+          currentStock: currentQty,
+          minStock: thresholdQty
         }
       });
     } else {
-      // Create new alert
       await tx.stockAlert.create({
         data: {
-          branchId,
-          productId: parseInt(productId),
-          alertType,
-          currentQuantity: currentQty,
-          thresholdQuantity: thresholdQty,
+          branch: { connect: { id: branchId } },
+          product: { connect: { id: numericProductId } },
+          productName: product?.name || 'Unknown',
+          sku: product?.sku || null,
+          currentStock: currentQty,
+          minStock: thresholdQty,
           status: 'active'
         }
       });
@@ -635,17 +665,15 @@ class InventoryService {
    */
   async startStockTake(data, userId, branchId) {
     const { category_id, notes } = data;
+    const numericBranchId = parseInt(branchId);
 
-    // Get products to count
-    const where = { branchId, trackStock: true };
-    if (category_id) {
-      where.categoryId = parseInt(category_id);
-    }
+    const where = { branchId: numericBranchId, trackStock: true };
+    if (category_id) where.categoryId = parseInt(category_id);
 
     const products = await prisma.product.findMany({
       where,
       include: {
-        stocks: { where: { branchId } },
+        stocks: { where: { branchId: numericBranchId } },
         category: { select: { id: true, name: true } }
       }
     });
@@ -675,18 +703,20 @@ class InventoryService {
    */
   async submitStockTake(data, userId, branchId) {
     const { stock_take_id, counts, notes } = data;
-
+    const numericBranchId = parseInt(branchId);
+    const numericUserId = parseInt(userId);
     const results = [];
 
     await prisma.$transaction(async (tx) => {
-      for (const count of counts) {
+      for (const count of (counts || [])) {
         const { product_id, counted_quantity } = count;
+        const numericProductId = parseInt(product_id);
 
         const stock = await tx.productStock.findUnique({
           where: {
             productId_branchId: {
-              productId: product_id,
-              branchId
+              productId: numericProductId,
+              branchId: numericBranchId
             }
           }
         });
@@ -695,28 +725,26 @@ class InventoryService {
         const variance = counted_quantity - systemQty;
 
         if (variance !== 0) {
-          // Create adjustment
           await tx.productStock.upsert({
             where: {
               productId_branchId: {
-                productId: product_id,
-                branchId
+                productId: numericProductId,
+                branchId: numericBranchId
               }
             },
             update: { stockQuantity: counted_quantity },
             create: {
-              productId: product_id,
-              branchId,
-              stockQuantity: counted_quantity,
-              minStockLevel: 10
+              product: { connect: { id: numericProductId } },
+              branch: { connect: { id: numericBranchId } },
+              stockQuantity: counted_quantity
             }
           });
 
           await tx.inventoryMovement.create({
             data: {
-              branchId,
-              productId: product_id,
-              userId,
+              branch: { connect: { id: numericBranchId } },
+              product: { connect: { id: numericProductId } },
+              user: { connect: { id: numericUserId } },
               type: 'adjustment',
               reason: 'correction',
               quantity: Math.abs(variance),
@@ -729,7 +757,7 @@ class InventoryService {
         }
 
         results.push({
-          product_id,
+          product_id: numericProductId,
           system_quantity: systemQty,
           counted_quantity,
           variance,
@@ -741,7 +769,7 @@ class InventoryService {
     return {
       stock_take_id,
       completed_at: new Date(),
-      total_products: counts.length,
+      total_products: (counts || []).length,
       products_adjusted: results.filter(r => r.adjusted).length,
       total_variance: results.reduce((sum, r) => sum + r.variance, 0),
       results
@@ -754,11 +782,12 @@ class InventoryService {
    * Get inventory valuation report
    */
   async getValuationReport(branchId) {
+    const numericBranchId = parseInt(branchId);
     const products = await prisma.product.findMany({
-      where: { branchId, trackStock: true },
+      where: { branchId: numericBranchId, trackStock: true },
       include: {
         category: { select: { id: true, name: true } },
-        stocks: { where: { branchId } }
+        stocks: { where: { branchId: numericBranchId } }
       }
     });
 
@@ -772,12 +801,11 @@ class InventoryService {
         stock_quantity: stockQty,
         cost_price: Number(p.costPrice),
         stock_value: stockQty * Number(p.costPrice),
-        selling_price: Number(p.price),
-        potential_revenue: stockQty * Number(p.price)
+        selling_price: Number(p.sellingPrice),
+        potential_revenue: stockQty * Number(p.sellingPrice)
       };
     });
 
-    // Group by category
     const byCategory = {};
     for (const item of items) {
       const catName = item.category?.name || 'Uncategorized';
@@ -811,14 +839,12 @@ class InventoryService {
    */
   async getMovementSummary(query, branchId) {
     const { date_from, date_to } = query;
-
-    const where = { branchId };
+    const numericBranchId = parseInt(branchId);
+    const where = { branchId: numericBranchId };
 
     if (date_from || date_to) {
       where.createdAt = {};
-      if (date_from) {
-        where.createdAt.gte = new Date(date_from);
-      }
+      if (date_from) where.createdAt.gte = new Date(date_from);
       if (date_to) {
         const endDate = new Date(date_to);
         endDate.setHours(23, 59, 59, 999);
@@ -828,12 +854,9 @@ class InventoryService {
 
     const movements = await prisma.inventoryMovement.findMany({
       where,
-      include: {
-        product: { select: { id: true, name: true } }
-      }
+      include: { product: { select: { id: true, name: true } } }
     });
 
-    // Aggregate by type and reason
     const summary = {
       total_movements: movements.length,
       by_type: {
@@ -853,7 +876,6 @@ class InventoryService {
       summary.by_reason[m.reason].total_quantity += m.quantity;
     }
 
-    // Top products by movement
     const productMovements = {};
     for (const m of movements) {
       if (!productMovements[m.productId]) {
@@ -865,21 +887,39 @@ class InventoryService {
         };
       }
       productMovements[m.productId].movement_count++;
-      if (m.type === 'in') {
-        productMovements[m.productId].total_in += m.quantity;
-      } else if (m.type === 'out') {
-        productMovements[m.productId].total_out += m.quantity;
-      }
+      if (m.type === 'in') productMovements[m.productId].total_in += m.quantity;
+      else if (m.type === 'out') productMovements[m.productId].total_out += m.quantity;
     }
 
     const topProducts = Object.values(productMovements)
       .sort((a, b) => b.movement_count - a.movement_count)
       .slice(0, 10);
 
-    return {
-      ...summary,
-      top_products: topProducts
-    };
+    return { ...summary, top_products: topProducts };
+  }
+
+  // ==================== EXPORT ====================
+
+  /**
+   * Export stock data as CSV
+   */
+  async exportStockCSV(query, branchId) {
+    const result = await this.getStockLevels({ ...query, per_page: 10000 }, branchId);
+    const items = result.items || [];
+
+    const headers = ['Product', 'SKU', 'Category', 'Stock Qty', 'Min Stock', 'Cost Price', 'Stock Value', 'Status'];
+    const rows = items.map(item => [
+      `"${(item.name || '').replace(/"/g, '""')}"`,
+      item.sku || '',
+      item.category?.name || '',
+      item.stock_quantity,
+      item.min_stock,
+      item.cost_price,
+      item.stock_value.toFixed(2),
+      item.status
+    ]);
+
+    return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   }
 }
 

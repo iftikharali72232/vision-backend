@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const printerController = require('../controllers/printer.controller');
-const { authenticate, requirePermission } = require('../middlewares/auth.new');
+const { authenticate, requirePermission } = require('../middlewares/auth');
 
 // All routes require authentication
 router.use(authenticate);

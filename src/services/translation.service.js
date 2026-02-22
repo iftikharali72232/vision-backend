@@ -1,4 +1,5 @@
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { languages, rtlLanguages } = require('../config/constants');
 
 class TranslationService {

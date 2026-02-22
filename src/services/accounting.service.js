@@ -1,4 +1,5 @@
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { pagination: paginationConfig, defaultChartOfAccounts } = require('../config/constants');
 const { NotFoundError, BadRequestError, AppError } = require('../middlewares/errorHandler');
 

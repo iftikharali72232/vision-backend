@@ -297,6 +297,7 @@ model Product {
   sku               String   @db.VarChar(100)
   barcode           String?  @db.VarChar(100)
   description       String?  @db.Text
+  unit              Unit     @default(pieces)
   basePrice         Decimal  @default(0) @map("base_price") @db.Decimal(10, 2)
   sellingPrice      Decimal  @default(0) @map("selling_price") @db.Decimal(10, 2)
   costPrice         Decimal  @default(0) @map("cost_price") @db.Decimal(10, 2)

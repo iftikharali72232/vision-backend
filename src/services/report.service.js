@@ -1,5 +1,6 @@
 const { Prisma } = require('@prisma/client');
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 
 class ReportService {
   /**
@@ -126,29 +127,51 @@ class ReportService {
         orderByField = 'quantity_sold';
     }
 
-    // Raw query for better performance with complex aggregations
-    const products = await prisma.$queryRaw`
-      SELECT 
+    // Build SQL safely: use parameterized values for data, but whitelist
+    // order field and direction since identifiers can't be parameterized.
+    const allowedFields = ['quantity_sold', 'revenue', 'profit'];
+    if (!allowedFields.includes(orderByField)) orderByField = 'quantity_sold';
+    const direction = (String(sort_order || 'desc').toUpperCase() === 'ASC') ? 'ASC' : 'DESC';
+
+    // Build the complete SQL string first, then wrap in Prisma.sql
+    let sqlString = `
+      SELECT
         p.id as product_id,
         p.name as product_name,
         p.sku as product_sku,
         c.name as category,
         SUM(oi.quantity) as quantity_sold,
-        SUM(oi.subtotal) as revenue,
+        SUM(oi.total) as revenue,
         SUM(oi.quantity * p.cost_price) as cost,
-        SUM(oi.subtotal) - SUM(oi.quantity * p.cost_price) as profit
+        SUM(oi.total) - SUM(oi.quantity * p.cost_price) as profit
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.id
       JOIN products p ON oi.product_id = p.id
       LEFT JOIN categories c ON p.category_id = c.id
       WHERE o.status = 'completed'
-      AND o.created_at >= ${startDate}
-      AND o.created_at <= ${endDate}
-      ${branchId ? Prisma.sql`AND o.branch_id = ${branchId}` : Prisma.empty}
-      ${category_id ? Prisma.sql`AND p.category_id = ${parseInt(category_id)}` : Prisma.empty}
-      GROUP BY p.id, p.name, p.sku, c.name
-      ORDER BY ${Prisma.raw(orderByField)} ${Prisma.raw(sort_order.toUpperCase())}
+        AND o.created_at >= ?
+        AND o.created_at <= ?
     `;
+
+    const params = [startDate, endDate];
+
+    if (branchId) {
+      sqlString += ` AND o.branch_id = ?`;
+      params.push(branchId);
+    }
+    if (category_id) {
+      sqlString += ` AND p.category_id = ?`;
+      params.push(parseInt(category_id));
+    }
+
+    sqlString += ` GROUP BY p.id, p.name, p.sku, c.name ORDER BY ${orderByField} ${direction}`;
+
+    // Debug: log SQL when running in development to inspect final query
+    if (process.env.NODE_ENV === 'development' || true) {
+      console.debug('Product report SQL:', sqlString);
+      console.debug('Product report params:', params);
+    }
+    const products = await prisma.$queryRawUnsafe(sqlString, ...params);
 
     const items = products.map(p => {
       const revenue = Number(p.revenue);
@@ -201,8 +224,8 @@ class ReportService {
 
     if (branchId) where.branchId = branchId;
 
-    const cashierStats = await prisma.$queryRaw`
-      SELECT 
+    let sql = Prisma.sql`
+      SELECT
         u.id as user_id,
         u.name as user_name,
         SUM(CASE WHEN o.status = 'completed' THEN o.total ELSE 0 END) as total_sales,
@@ -210,16 +233,28 @@ class ReportService {
         SUM(CASE WHEN o.status = 'completed' THEN o.discount_amount ELSE 0 END) as total_discounts_given,
         COUNT(CASE WHEN o.status = 'cancelled' THEN 1 END) as cancelled_orders,
         COUNT(CASE WHEN o.status = 'refunded' THEN 1 END) as refunded_orders
-      FROM users u
+      FROM branch_users u
       LEFT JOIN orders o ON u.id = o.user_id
         AND o.created_at >= ${startDate}
         AND o.created_at <= ${endDate}
-        ${branchId ? Prisma.sql`AND o.branch_id = ${branchId}` : Prisma.empty}
-      WHERE u.role IN ('cashier', 'manager', 'admin')
+    `;
+
+    if (branchId) {
+      sql = Prisma.sql`${sql} AND o.branch_id = ${branchId}`;
+    }
+
+    // Note: Role filtering (cashier/manager/admin) is not applied here because roles are stored
+    // in the system database, but we're querying the tenant database. All active branch users
+    // with orders in the date range are included. Role filtering should be done at the application level.
+    sql = Prisma.sql`${sql}
+      WHERE u.is_active = 1
       GROUP BY u.id, u.name
       HAVING COUNT(o.id) > 0
       ORDER BY total_sales DESC
     `;
+
+    if (process.env.NODE_ENV === 'development' || true) console.debug('Cashier report SQL:', sql.sql);
+    const cashierStats = await prisma.$queryRaw(sql);
 
     return cashierStats.map(stat => {
       const totalSales = Number(stat.total_sales || 0);
@@ -481,23 +516,33 @@ class ReportService {
     };
     if (branchId) orderWhere.branchId = branchId;
 
-    const categories = await prisma.$queryRaw`
-      SELECT 
+    // Build SQL with Prisma.sql for dynamic parts
+    let sql = Prisma.sql`
+      SELECT
         c.id as category_id,
         c.name as category_name,
         SUM(oi.quantity) as quantity_sold,
-        SUM(oi.subtotal) as revenue
+        SUM(oi.total) as revenue
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.id
       JOIN products p ON oi.product_id = p.id
       LEFT JOIN categories c ON p.category_id = c.id
       WHERE o.status = 'completed'
-      AND o.created_at >= ${startDate}
-      AND o.created_at <= ${endDate}
-      ${branchId ? Prisma.sql`AND o.branch_id = ${branchId}` : Prisma.empty}
-      GROUP BY c.id, c.name
-      ORDER BY revenue DESC
+        AND o.created_at >= ${startDate}
+        AND o.created_at <= ${endDate}
     `;
+
+    if (branchId) {
+      sql = Prisma.sql`${sql} AND o.branch_id = ${branchId}`;
+    }
+
+    sql = Prisma.sql`${sql} GROUP BY c.id, c.name ORDER BY revenue DESC`;
+
+    if (process.env.NODE_ENV === 'development' || true) {
+      console.debug('Category report SQL:', sql.sql);
+    }
+
+    const categories = await prisma.$queryRaw(sql);
 
     return categories.map(c => ({
       category_id: c.category_id,
@@ -643,7 +688,7 @@ class ReportService {
     });
 
     // Cost of goods sold
-    const cogs = await prisma.$queryRaw`
+    let cogsSql = Prisma.sql`
       SELECT SUM(oi.quantity * p.cost_price) as total_cost
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.id
@@ -651,8 +696,13 @@ class ReportService {
       WHERE o.status = 'completed'
       AND o.created_at >= ${startDate}
       AND o.created_at <= ${endDate}
-      ${branchId ? Prisma.sql`AND o.branch_id = ${branchId}` : Prisma.empty}
     `;
+
+    if (branchId) {
+      cogsSql = Prisma.sql`${cogsSql} AND o.branch_id = ${branchId}`;
+    }
+
+    const cogs = await prisma.$queryRaw(cogsSql);
 
     const totalRevenue = Number(salesData._sum.total || 0);
     const totalCost = Number(cogs[0]?.total_cost || 0);
@@ -732,6 +782,94 @@ class ReportService {
       },
       equity: cashOnHand + Number(receivables._sum.dueAmount || 0) + inventoryValue - payables,
       generated_at: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Customer Report
+   */
+  async getCustomerReport(query, branchId = null) {
+    const { date_from, date_to, page = 1, per_page = 50 } = query;
+
+    const startDate = new Date(date_from || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+    startDate.setHours(0, 0, 0, 0);
+    
+    const endDate = new Date(date_to || new Date().toISOString().split('T')[0]);
+    endDate.setHours(23, 59, 59, 999);
+
+    const orderWhere = {
+      createdAt: { gte: startDate, lte: endDate },
+      status: { notIn: ['cancelled', 'refunded'] }
+    };
+    if (branchId) orderWhere.branchId = branchId;
+
+    // Get customers with order data
+    const customerWhere = {};
+    if (branchId) customerWhere.branchId = branchId;
+
+    const skip = (parseInt(page) - 1) * parseInt(per_page);
+    const take = parseInt(per_page);
+
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({
+        where: customerWhere,
+        skip,
+        take,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          orders: {
+            where: orderWhere,
+            select: {
+              id: true,
+              total: true,
+              createdAt: true,
+              status: true
+            }
+          }
+        }
+      }),
+      prisma.customer.count({ where: customerWhere })
+    ]);
+
+    const items = customers.map(customer => {
+      const orders = customer.orders || [];
+      const totalSpent = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+      
+      return {
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone,
+        email: customer.email,
+        total_orders: orders.length,
+        total_spent: totalSpent,
+        avg_order_value: orders.length > 0 ? totalSpent / orders.length : 0,
+        last_order_date: orders.length > 0 
+          ? orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0].createdAt 
+          : null,
+        created_at: customer.createdAt
+      };
+    });
+
+    // Sort by total_spent descending
+    items.sort((a, b) => b.total_spent - a.total_spent);
+
+    return {
+      items,
+      summary: {
+        total_customers: total,
+        active_customers: items.filter(c => c.total_orders > 0).length,
+        total_revenue_from_customers: items.reduce((sum, c) => sum + c.total_spent, 0),
+        date_range: {
+          from: startDate.toISOString().split('T')[0],
+          to: endDate.toISOString().split('T')[0]
+        }
+      },
+      pagination: {
+        current_page: parseInt(page),
+        per_page: take,
+        total_pages: Math.ceil(total / take),
+        total_items: total
+      }
     };
   }
 

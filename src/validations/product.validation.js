@@ -18,7 +18,7 @@ const createProduct = [
     .isInt().withMessage('Category ID must be an integer'),
   body('unit')
     .optional()
-    .isIn(['pieces', 'piece', 'kg', 'liters']).withMessage('Invalid unit'),
+    .isIn(['pieces', 'piece', 'kg', 'gram', 'liters', 'liter', 'ml', 'box', 'pack']).withMessage('Invalid unit'),
   body('cost_price')
     .optional()
     .isFloat({ min: 0 }).withMessage('Cost price must be a positive number'),
@@ -38,7 +38,7 @@ const createProduct = [
     .optional()
     .isInt({ min: 0 }).withMessage('Low stock threshold must be a non-negative integer'),
   body('image')
-    .optional()
+    .optional({ nullable: true })
     .isString().withMessage('Image must be a string'),
   body('images')
     .optional()
@@ -79,7 +79,7 @@ const updateProduct = [
     }),
   body('unit')
     .optional()
-    .isIn(['pieces', 'kg', 'liters']).withMessage('Invalid unit'),
+    .isIn(['pieces', 'piece', 'kg', 'gram', 'liters', 'liter', 'ml', 'box', 'pack']).withMessage('Invalid unit'),
   body('cost_price')
     .optional()
     .isFloat({ min: 0 }).withMessage('Cost price must be a positive number'),
@@ -103,12 +103,24 @@ const updateProduct = [
 const updateStock = [
   param('id')
     .isInt().withMessage('Invalid product ID'),
-  body('stock_quantity')
-    .notEmpty().withMessage('Stock quantity is required')
-    .isInt({ min: 0 }).withMessage('Stock quantity must be a non-negative integer'),
+  body('quantity')
+    .notEmpty().withMessage('Quantity is required')
+    .isInt({ min: 0 }).withMessage('Quantity must be a non-negative integer'),
   body('adjustment_type')
     .notEmpty().withMessage('Adjustment type is required')
     .isIn(['set', 'add', 'subtract']).withMessage('Invalid adjustment type'),
+  body('variation_id')
+    .optional()
+    .isInt({ min: 1 }).withMessage('variation_id must be a positive integer'),
+  body('unit_cost')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('unit_cost must be a non-negative number'),
+  body('reference')
+    .optional()
+    .isLength({ max: 255 }).withMessage('reference must not exceed 255 characters'),
+  body('notes')
+    .optional()
+    .isLength({ max: 1000 }).withMessage('notes must not exceed 1000 characters'),
   body('reason')
     .optional()
     .isLength({ max: 500 }).withMessage('Reason must not exceed 500 characters')
@@ -144,10 +156,81 @@ const listProducts = [
     .isIn(['asc', 'desc']).withMessage('Invalid sort order')
 ];
 
+const addVariation = [
+  param('id').isInt().withMessage('Invalid product ID'),
+  body('name')
+    .notEmpty().withMessage('Variation name is required')
+    .isLength({ min: 1, max: 255 }).withMessage('Variation name must be 1-255 characters'),
+  body('price')
+    .notEmpty().withMessage('Variation price is required')
+    .isFloat({ min: 0 }).withMessage('Variation price must be a non-negative number'),
+  body('sku')
+    .optional({ nullable: true })
+    .isLength({ max: 100 }).withMessage('SKU must not exceed 100 characters'),
+  body('barcode')
+    .optional({ nullable: true })
+    .isLength({ max: 100 }).withMessage('Barcode must not exceed 100 characters'),
+  body('cost_price')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Cost price must be a non-negative number'),
+  body('stock_quantity')
+    .optional()
+    .isInt({ min: 0 }).withMessage('Stock quantity must be a non-negative integer'),
+  body('image')
+    .optional({ nullable: true })
+    .isString().withMessage('Image must be a string'),
+  body('is_active')
+    .optional()
+    .isBoolean().withMessage('is_active must be a boolean'),
+  body('display_order')
+    .optional()
+    .isInt({ min: 0 }).withMessage('display_order must be a non-negative integer')
+];
+
+const updateVariation = [
+  param('id').isInt().withMessage('Invalid product ID'),
+  param('variationId').isInt().withMessage('Invalid variation ID'),
+  body('name')
+    .optional()
+    .isLength({ min: 1, max: 255 }).withMessage('Variation name must be 1-255 characters'),
+  body('price')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Variation price must be a non-negative number'),
+  body('sku')
+    .optional({ nullable: true })
+    .isLength({ max: 100 }).withMessage('SKU must not exceed 100 characters'),
+  body('barcode')
+    .optional({ nullable: true })
+    .isLength({ max: 100 }).withMessage('Barcode must not exceed 100 characters'),
+  body('cost_price')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Cost price must be a non-negative number'),
+  body('stock_quantity')
+    .optional()
+    .isInt({ min: 0 }).withMessage('Stock quantity must be a non-negative integer'),
+  body('image')
+    .optional({ nullable: true })
+    .isString().withMessage('Image must be a string'),
+  body('is_active')
+    .optional()
+    .isBoolean().withMessage('is_active must be a boolean'),
+  body('display_order')
+    .optional()
+    .isInt({ min: 0 }).withMessage('display_order must be a non-negative integer')
+];
+
+const deleteVariation = [
+  param('id').isInt().withMessage('Invalid product ID'),
+  param('variationId').isInt().withMessage('Invalid variation ID')
+];
+
 module.exports = {
   createProduct,
   updateProduct,
   updateStock,
+  addVariation,
+  updateVariation,
+  deleteVariation,
   listProducts,
   getProducts: listProducts,
   getProductsForPOS: listProducts,

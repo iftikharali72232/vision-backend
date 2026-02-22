@@ -129,6 +129,13 @@ router.get('/profit-loss', reportController.profitLoss);
 router.get('/balance-sheet', reportController.balanceSheet);
 
 /**
+ * @route GET /api/v1/reports/customers
+ * @desc Customer report
+ * @access Private - Admin, Manager with branch
+ */
+router.get('/customers', reportController.customers);
+
+/**
  * @route GET /api/v1/reports/wastage
  * @desc Wastage report
  * @access Private - Admin, Manager with branch

@@ -19,6 +19,23 @@ class SettingController {
   }
 
   /**
+   * Get a specific setting by key
+   * GET /settings/:key
+   */
+  async getByKey(req, res, next) {
+    try {
+      const data = await settingService.getSetting(req.params.key);
+
+      res.json({
+        success: true,
+        data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Update settings
    * PUT /settings
    */

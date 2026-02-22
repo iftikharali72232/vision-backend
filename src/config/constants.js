@@ -66,7 +66,7 @@ module.exports = {
     owner: [
       'dashboard', 'dashboard.view',
       'pos', 'pos.view', 'pos.create_order',
-      'products', 'products.view', 'products.create', 'products.edit', 'products.stock',
+      'products', 'products.view', 'products.create', 'products.edit', 'products.delete', 'products.stock',
       'orders', 'orders.view', 'orders.create', 'orders.update', 'orders.refund', 'orders.cancel',
       'customers', 'customers.view', 'customers.create', 'customers.update', 'customers.delete',
       'reports', 'reports.view', 'reports.export',
@@ -83,7 +83,7 @@ module.exports = {
     manager: [
       'dashboard', 'dashboard.view',
       'pos', 'pos.view', 'pos.create_order',
-      'products', 'products.view', 'products.create', 'products.edit', 'products.stock',
+      'products', 'products.view', 'products.create', 'products.edit', 'products.delete', 'products.stock',
       'orders', 'orders.view', 'orders.create', 'orders.update', 'orders.refund', 'orders.cancel',
       'customers', 'customers.view', 'customers.create', 'customers.update',
       'reports', 'reports.view', 'reports.export',

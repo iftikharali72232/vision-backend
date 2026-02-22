@@ -14,8 +14,12 @@ const app = express();
 // Trust proxy (for rate limiting behind reverse proxy)
 app.set('trust proxy', 1);
 
-// Security middleware
-app.use(helmet());
+// Security middleware - configure helmet to allow cross-origin resource loading
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  contentSecurityPolicy: false, // Disable CSP in development for easier debugging
+}));
 
 // CORS configuration
 // app.use(cors({
@@ -25,7 +29,18 @@ app.use(helmet());
 //   allowedHeaders: ['Content-Type', 'Authorization', 'X-Branch-Id']
 // }));
 app.use(cors({
-  origin: process.env.CORS_ORIGIN, // http://localhost:3000
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Allow localhost origins in development
+    if (origin.startsWith('http://localhost:')) return callback(null, true);
+    
+    // Allow the configured CORS_ORIGIN
+    if (process.env.CORS_ORIGIN && origin === process.env.CORS_ORIGIN) return callback(null, true);
+    
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true
 }));
 
@@ -39,6 +54,22 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // Static files (for uploads)
+app.use('/uploads', (req, res, next) => {
+  // Allow localhost origins in development
+  if (!req.headers.origin || req.headers.origin.startsWith('http://localhost:')) {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  } else if (process.env.CORS_ORIGIN && req.headers.origin === process.env.CORS_ORIGIN) {
+    res.header('Access-Control-Allow-Origin', process.env.CORS_ORIGIN);
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Default rate limiter

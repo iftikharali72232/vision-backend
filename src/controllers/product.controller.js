@@ -76,7 +76,7 @@ class ProductController {
    */
   async show(req, res, next) {
     try {
-      const data = await productService.getProductById(req.params.id);
+      const data = await productService.getProductById(req.params.id, req.branchId);
 
       res.json({
         success: true,
@@ -93,7 +93,7 @@ class ProductController {
    */
   async store(req, res, next) {
     try {
-      const data = await productService.createProduct(req.body);
+      const data = await productService.createProduct(req.body, req.branchId);
 
       res.status(201).json({
         success: true,
@@ -111,7 +111,7 @@ class ProductController {
    */
   async update(req, res, next) {
     try {
-      const data = await productService.updateProduct(req.params.id, req.body);
+      const data = await productService.updateProduct(req.params.id, req.body, req.branchId);
 
       res.json({
         success: true,
@@ -129,7 +129,7 @@ class ProductController {
    */
   async destroy(req, res, next) {
     try {
-      const result = await productService.deleteProduct(req.params.id);
+      const result = await productService.deleteProduct(req.params.id, req.branchId);
 
       res.json({
         success: true,
@@ -148,8 +148,8 @@ class ProductController {
     try {
       const data = await productService.updateStock(
         req.params.id,
-        req.branchId,
         req.body,
+        req.branchId,
         req.user.id
       );
 
@@ -157,6 +157,64 @@ class ProductController {
         success: true,
         message: 'Stock updated successfully',
         data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Add product variation
+   * POST /products/:id/variations
+   */
+  async addVariation(req, res, next) {
+    try {
+      const data = await productService.addVariation(req.params.id, req.body, req.branchId);
+
+      res.status(201).json({
+        success: true,
+        message: 'Variation created successfully',
+        data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Update product variation
+   * PUT /products/:id/variations/:variationId
+   */
+  async updateVariation(req, res, next) {
+    try {
+      const data = await productService.updateVariation(
+        req.params.id,
+        req.params.variationId,
+        req.body,
+        req.branchId
+      );
+
+      res.json({
+        success: true,
+        message: 'Variation updated successfully',
+        data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Delete product variation
+   * DELETE /products/:id/variations/:variationId
+   */
+  async deleteVariation(req, res, next) {
+    try {
+      const result = await productService.deleteVariation(req.params.id, req.params.variationId, req.branchId);
+
+      res.json({
+        success: true,
+        message: result.message
       });
     } catch (error) {
       next(error);

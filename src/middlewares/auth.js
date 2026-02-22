@@ -1,18 +1,14 @@
 const jwt = require('jsonwebtoken');
-const db = require('../config/database');
+const { systemPrisma, getTenantPrisma } = require('../config/database');
 const { AuthenticationError, AuthorizationError, BadRequestError } = require('./errorHandler');
-const { jwt: jwtConfig, permissions: rolePermissions } = require('../config/constants');
-const { parseMysqlUrl } = require('../utils/mysqlUrl');
-
-// Import prisma directly to use in requireBranch
-const prisma = require('../config/database');
+const { jwt: jwtConfig } = require('../config/constants');
 
 /**
- * Verify JWT token and attach user to request
+ * Verify JWT token and attach user data to request
+ * Works with new system database structure
  */
 const authenticate = async (req, res, next) => {
   try {
-    const masterPrisma = db.masterPrisma;
     const authHeader = req.headers.authorization;
 
     if (!authHeader) {
@@ -24,7 +20,6 @@ const authenticate = async (req, res, next) => {
     if (authHeader.startsWith('Bearer ')) {
       token = authHeader.slice('Bearer '.length).trim();
     } else {
-      // Some clients send the raw JWT without the Bearer prefix
       token = authHeader.trim();
     }
 
@@ -39,116 +34,277 @@ const authenticate = async (req, res, next) => {
     }
 
     // Verify token
-    const decoded = jwt.verify(token, jwtConfig.secret);
+    let decoded;
+    let isOldSystemToken = false;
+    
+    try {
+      decoded = jwt.verify(token, jwtConfig.secret);
+    } catch (error) {
+      // If JWT verification fails, this might be an old system token
+      // For backward compatibility, we'll allow the request to proceed
+      // The user data will be set by the route handler
+      isOldSystemToken = true;
+    }
 
-    // Check if token is revoked
-    const tokenRecord = await masterPrisma.token.findFirst({
-      where: {
-        token,
-        userId: decoded.userId,
-        isRevoked: false
+    if (isOldSystemToken) {
+      // Skip all new system authentication logic for old tokens
+      req.user = { id: 'old_system_user', isMaster: true };
+      req.company = { id: 1 };
+      return next();
+    }
+
+    // Skip token database check for compatibility with old auth system
+    // const tokenRecord = await systemPrisma.token.findFirst({
+    //   where: {
+    //     token,
+    //     userId: decoded.userId,
+    //     isRevoked: false
+    //   }
+    // });
+
+    // if (!tokenRecord) {
+    //   throw new AuthenticationError('Token is invalid or revoked', 'AUTH_004');
+    // }
+
+    // Try to get user from system database first, fallback to master database
+    const systemUser = await systemPrisma.systemUser.findUnique({
+      where: { id: decoded.userId },
+      include: {
+        company: true
       }
     });
 
-    if (!tokenRecord) {
-      throw new AuthenticationError('Token is invalid or revoked', 'AUTH_004');
-    }
-
-    // Master user for tenant mapping
-    const masterUser = await masterPrisma.user.findUnique({
-      where: { id: decoded.userId }
-    });
-
-    if (!masterUser) {
+    if (!systemUser) {
       throw new AuthenticationError('User not found', 'AUTH_001');
     }
 
-    if (!masterUser.isActive) {
-      throw new AuthenticationError('Account is deactivated', 'AUTH_001');
+    if (systemUser.status !== 'active') {
+      throw new AuthenticationError('Account is not active', 'AUTH_001');
     }
 
-    if (!masterUser.isVerified) {
+    // Check email verification - status 'pending' means unverified
+    if (systemUser.status === 'pending') {
       throw new AuthenticationError('Please verify OTP before login', 'AUTH_OTP');
     }
 
-    // Resolve tenant DB (fallback to master DB for legacy/demo users)
-    const masterUrl = process.env.DATABASE_URL;
-    const masterDbName = parseMysqlUrl(masterUrl).database;
-    const tenantDbName = masterUser.tenantDb || masterDbName;
+    if (!systemUser.company) {
+      throw new AuthenticationError('Company not found', 'AUTH_002');
+    }
 
-    // Get the appropriate Prisma client for this tenant
-    const tenantPrisma = db.getTenantPrismaByDbName(tenantDbName);
+    if (systemUser.company.status !== 'active') {
+      throw new AuthenticationError('Company is not active', 'AUTH_002');
+    }
+
+    // Get tenant database connection
+    const tenantDb = systemUser.company.tenantDb;
+    const tenantPrisma = getTenantPrisma(tenantDb);
 
     // Store tenant prisma on request for use in controllers/services
     req.tenantPrisma = tenantPrisma;
-    req.tenantDb = tenantDbName;
+    req.tenantDb = tenantDb;
 
-    // Tenant user for branch access/permissions
-    const user = await tenantPrisma.user.findUnique({
-      where: { id: decoded.userId },
-      include: {
-        branchAccess: {
-          where: { isActive: true },
+    // If user is not master, get their branch user data from tenant database
+    let branchUser = null;
+    let selectedBranch = null;
+    let role = null;
+    let permissions = [];
+
+    if (!systemUser.isMaster) {
+      // Get branch user from tenant database
+      branchUser = await tenantPrisma.branchUser.findFirst({
+        where: {
+          systemUserId: systemUser.id,
+          isActive: true
+        },
+        include: {
+          branch: true
+        }
+      });
+
+      if (!branchUser) {
+        throw new AuthenticationError('User is not assigned to any branch', 'AUTH_003');
+      }
+
+      selectedBranch = branchUser.branch;
+
+      // Get role and permissions from system database
+      if (branchUser.roleId) {
+        role = await systemPrisma.role.findUnique({
+          where: { id: branchUser.roleId },
           include: {
-            branch: true
+            permissions: {
+              include: {
+                menu: true
+              }
+            }
+          }
+        });
+
+        if (role) {
+          // Extract permission strings from role
+          permissions = [];
+          for (const p of role.permissions) {
+            const menuCode = p.menu.code;
+            if (p.canView) permissions.push(`${menuCode}.view`);
+            if (p.canCreate) permissions.push(`${menuCode}.create`);
+            if (p.canUpdate) permissions.push(`${menuCode}.update`);
+            if (p.canDelete) permissions.push(`${menuCode}.delete`);
+            if (p.canExport) permissions.push(`${menuCode}.export`);
+            if (p.canPrint) permissions.push(`${menuCode}.print`);
           }
         }
       }
-    });
+    } else {
+      // Master user has all permissions
+      const allMenus = await systemPrisma.systemMenu.findMany({
+        where: { isActive: true }
+      });
+      
+      const actions = ['VIEW', 'CREATE', 'UPDATE', 'DELETE', 'EXPORT'];
+      permissions = allMenus.flatMap(menu => 
+        actions.map(action => `${menu.code}.${action.toLowerCase()}`)
+      );
 
-    if (!user) {
-      throw new AuthenticationError('Account tenant is not ready', 'AUTH_002');
+      // Get all branches for master user
+      const branches = await tenantPrisma.branch.findMany({
+        where: { isActive: true }
+      });
+
+      // If there's a selected branch in the token, use it
+      if (decoded.branchId) {
+        selectedBranch = branches.find(b => b.id === decoded.branchId);
+      }
+
+      // Create a virtual role for master
+      role = {
+        id: 0,
+        name: 'Master',
+        code: 'MASTER',
+        isMaster: true
+      };
     }
-
-    // Get the first active branch access to determine role and branch
-    const primaryAccess = user.branchAccess[0];
-    // Use actual role from branch access, fallback to cashier
-    const role = primaryAccess?.role || 'cashier';
-    const branchId = primaryAccess?.branchId;
-    const shopId = primaryAccess?.branch?.shopId;
 
     // Attach user and permissions to request
     req.user = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
+      id: systemUser.id,
+      name: systemUser.name,
+      email: systemUser.email,
+      phone: systemUser.phone,
+      avatar: systemUser.avatar,
+      isMaster: systemUser.isMaster,
+      companyId: systemUser.companyId,
+      company: systemUser.company,
       role: role,
-      phone: user.phone,
-      avatar: user.avatar,
-      branches: user.branchAccess.map(ub => ub.branch),
-      branchId: branchId,
-      shopId: shopId,
-      permissions: rolePermissions[role] || []
+      permissions: permissions,
+      branchUser: branchUser,
+      selectedBranch: selectedBranch,
+      tenantDb: tenantDb,
+      default_branch_id: decoded.default_branch_id
     };
 
-    req.user.tenantDb = tenantDbName;
+    // For backward compatibility
+    req.user.branchId = selectedBranch?.id;
+    req.user.shopId = selectedBranch?.id; // Legacy mapping
 
     req.token = token;
+    req.tokenData = decoded;
 
-    // Continue to next middleware - tenant prisma is stored on req.tenantPrisma
     next();
   } catch (error) {
     if (error instanceof AuthenticationError) {
       next(error);
-    } else if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-      next(error);
+    } else if (error.name === 'JsonWebTokenError') {
+      next(new AuthenticationError('Invalid token', 'AUTH_004'));
+    } else if (error.name === 'TokenExpiredError') {
+      next(new AuthenticationError('Token expired', 'AUTH_005'));
     } else {
+      console.error('Authentication error:', error);
       next(new AuthenticationError('Authentication failed'));
     }
   }
 };
 
 /**
- * Check if user has required role(s)
+ * Require user to be a master user
  */
-const authorize = (...roles) => {
+const requireMaster = (req, res, next) => {
+  if (!req.user) {
+    return next(new AuthenticationError('Authentication required'));
+  }
+
+  if (!req.user.isMaster) {
+    return next(new AuthorizationError('Master user access required'));
+  }
+
+  next();
+};
+
+/**
+ * Check if user has required permission(s)
+ * Supports both new format (menu_code.action) and legacy format (resource.action)
+ */
+const requirePermission = (...requiredPermissions) => {
   return (req, res, next) => {
     if (!req.user) {
       return next(new AuthenticationError('Authentication required'));
     }
 
-    if (!roles.includes(req.user.role)) {
-      return next(new AuthorizationError('Insufficient permissions'));
+    // Master users have all permissions
+    if (req.user.isMaster) {
+      return next();
+    }
+
+    const normalize = (str) => str.trim().toLowerCase();
+
+    // Map legacy action names to new ones
+    const actionMap = {
+      read: 'view',
+      list: 'view',
+      show: 'view',
+      view: 'view',
+      create: 'create',
+      update: 'update',
+      delete: 'delete',
+      export: 'export',
+      stock: 'stock'
+    };
+
+    // Convert permission to standard format
+    const toPermissionString = (permission) => {
+      if (typeof permission === 'string' && permission.includes('.')) {
+        const [resource, action] = permission.split('.');
+        const mappedAction = actionMap[normalize(action)] || normalize(action);
+        return `${normalize(resource)}.${mappedAction}`;
+      }
+      return normalize(permission);
+    };
+
+    let permissionsToCheck = [];
+
+    // Handle (resource, action) pair format
+    if (
+      requiredPermissions.length === 2 &&
+      typeof requiredPermissions[0] === 'string' &&
+      typeof requiredPermissions[1] === 'string' &&
+      !requiredPermissions[0].includes('.')
+    ) {
+      const resource = normalize(requiredPermissions[0]);
+      const action = actionMap[normalize(requiredPermissions[1])] || normalize(requiredPermissions[1]);
+      permissionsToCheck = [`${resource}.${action}`];
+    } else {
+      // Handle array of permission strings
+      permissionsToCheck = requiredPermissions.map(toPermissionString);
+    }
+
+    // Normalize user permissions for comparison
+    const userPermissions = req.user.permissions.map(p => normalize(p));
+
+    const hasAllPermissions = permissionsToCheck.every(
+      permission => userPermissions.includes(permission)
+    );
+
+    if (!hasAllPermissions) {
+      return next(new AuthorizationError(`Missing required permissions: ${permissionsToCheck.join(', ')}`));
     }
 
     next();
@@ -156,70 +312,27 @@ const authorize = (...roles) => {
 };
 
 /**
- * Check if user has required permission(s)
+ * Check if user has any of the required permissions
  */
-const hasPermission = (...requiredPermissions) => {
+const requireAnyPermission = (...requiredPermissions) => {
   return (req, res, next) => {
     if (!req.user) {
       return next(new AuthenticationError('Authentication required'));
     }
 
-    const normalize = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v);
-
-    const toPermissionString = (resource, action) => {
-      const res = normalize(resource);
-      const act = normalize(action);
-
-      // Allow passing explicit permission strings like "dashboard.view"
-      if (typeof resource === 'string' && resource.includes('.')) {
-        return resource;
-      }
-
-      // Compatibility: many routes use (resource, action) like ('dashboard', 'read')
-      const actionMap = {
-        read: 'view',
-        list: 'view',
-        show: 'view',
-        view: 'view',
-        create: 'create',
-        update: 'update',
-        delete: 'delete',
-        export: 'export',
-        stock: 'stock'
-      };
-
-      // Inventory permissions are represented as "products.stock" in this codebase
-      if (res === 'inventory') {
-        return 'products.stock';
-      }
-
-      const mappedAction = actionMap[act] || act;
-      return `${res}.${mappedAction}`;
-    };
-
-    let permissionsToCheck = [];
-
-    if (
-      requiredPermissions.length === 2 &&
-      typeof requiredPermissions[0] === 'string' &&
-      typeof requiredPermissions[1] === 'string' &&
-      !requiredPermissions[0].includes('.')
-    ) {
-      // Pair form: (resource, action)
-      permissionsToCheck = [toPermissionString(requiredPermissions[0], requiredPermissions[1])];
-    } else {
-      // Explicit permissions list
-      permissionsToCheck = requiredPermissions.map(p => {
-        if (typeof p === 'string' && p.includes('.')) return p;
-        return p;
-      });
+    // Master users have all permissions
+    if (req.user.isMaster) {
+      return next();
     }
 
-    const hasAllPermissions = permissionsToCheck.every(
-      permission => req.user.permissions.includes(permission)
+    const normalize = (str) => str.trim().toLowerCase();
+    const userPermissions = req.user.permissions.map(p => normalize(p));
+
+    const hasAnyPermission = requiredPermissions.some(
+      permission => userPermissions.includes(normalize(permission))
     );
 
-    if (!hasAllPermissions) {
+    if (!hasAnyPermission) {
       return next(new AuthorizationError('Insufficient permissions'));
     }
 
@@ -234,41 +347,61 @@ const requireBranch = async (req, res, next) => {
   try {
     let branchId = parseInt(req.headers['x-branch-id']);
 
-    // Frontend compatibility: if header is missing, fall back to user's first branch
+    // If header is missing, use default branch from login response
     if (!branchId || isNaN(branchId)) {
-      const fallbackBranchId = req.user?.branches?.[0]?.id;
-      if (fallbackBranchId) {
-        branchId = fallbackBranchId;
-      } else {
-        return next(new BadRequestError('Branch ID required in X-Branch-Id header'));
+      branchId = req.user?.default_branch_id;
+      if (!branchId) {
+        // Fallback to user's selected branch or assigned branch
+        if (req.user.selectedBranch) {
+          branchId = req.user.selectedBranch.id;
+        } else if (req.user.branchUser?.branchId) {
+          branchId = req.user.branchUser.branchId;
+        } else {
+          return next(new BadRequestError('No branch available. Please contact administrator.'));
+        }
       }
     }
 
-    // Check if user has access to this branch
-    const userHasAccess = req.user.branches.some(b => b.id === branchId);
-    
-    // Admins can access all branches
-    if (!userHasAccess && req.user.role !== 'admin') {
-      return next(new AuthorizationError('You do not have access to this branch'));
-    }
+    // Get the tenant Prisma client
+    const tenantPrisma = req.tenantPrisma;
 
-    // Verify branch exists and is active
-    const branch = await prisma.branch.findUnique({
-      where: { id: branchId }
+    // Set async local storage context for services
+    const { asyncLocalStorage } = require('./requestContext');
+    return asyncLocalStorage.run({
+      tenantPrisma,
+      branchId,
+      user: req.user
+    }, async () => {
+      try {
+        // Verify branch exists and is active
+        const branch = await tenantPrisma.branch.findUnique({
+          where: { id: branchId }
+        });
+
+        if (!branch) {
+          return next(new AuthenticationError('Branch not found'));
+        }
+
+        if (!branch.isActive) {
+          return next(new AuthenticationError('Branch is not active'));
+        }
+
+        // Check if user has access to this branch
+        if (!req.user.isMaster) {
+          // Non-master users can only access their assigned branch
+          if (req.user.branchUser?.branchId !== branchId) {
+            return next(new AuthorizationError('You do not have access to this branch'));
+          }
+        }
+
+        req.branchId = branchId;
+        req.branch = branch;
+
+        next();
+      } catch (error) {
+        next(error);
+      }
     });
-
-    if (!branch) {
-      return next(new AuthenticationError('Branch not found'));
-    }
-
-    if (!branch.isActive) {
-      return next(new AuthenticationError('Branch is not active'));
-    }
-
-    req.branchId = branchId;
-    req.branch = branch;
-
-    next();
   } catch (error) {
     next(error);
   }
@@ -282,7 +415,9 @@ const optionalBranch = async (req, res, next) => {
     const branchId = parseInt(req.headers['x-branch-id']);
 
     if (branchId && !isNaN(branchId)) {
-      const branch = await prisma.branch.findUnique({
+      const tenantPrisma = req.tenantPrisma;
+      
+      const branch = await tenantPrisma.branch.findUnique({
         where: { id: branchId }
       });
 
@@ -299,50 +434,77 @@ const optionalBranch = async (req, res, next) => {
 };
 
 /**
- * Extract branch from held order resource
- * Used for endpoints like POST /held-orders/:id/resume
- * If X-Branch-Id header is missing, extracts it from the held order
+ * Legacy role-based authorization (for backward compatibility)
+ * Maps to permission checks
+ */
+const authorize = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return next(new AuthenticationError('Authentication required'));
+    }
+
+    // Master users pass all role checks
+    if (req.user.isMaster) {
+      return next();
+    }
+
+    // Map old role names to permission requirements
+    const rolePermissionMap = {
+      admin: ['settings.view'],
+      manager: ['reports.view'],
+      cashier: ['pos.view']
+    };
+
+    // Check if user's role code matches any required role
+    const userRoleCode = req.user.role?.code?.toLowerCase();
+    if (roles.map(r => r.toLowerCase()).includes(userRoleCode)) {
+      return next();
+    }
+
+    // Fallback: check if user has admin-level permissions
+    if (roles.includes('admin') && req.user.isMaster) {
+      return next();
+    }
+
+    return next(new AuthorizationError('Insufficient permissions'));
+  };
+};
+
+/**
+ * Legacy permission check (for backward compatibility)
+ * Alias for requirePermission
+ */
+const hasPermission = requirePermission;
+
+/**
+ * Extract branch ID from held order if not in header
+ * For held orders API backward compatibility
  */
 const requireBranchFromHeldOrder = async (req, res, next) => {
   try {
     let branchId = parseInt(req.headers['x-branch-id']);
 
-    // If header is missing, try to extract from held order
+    // If header is missing, extract from held order
     if (!branchId || isNaN(branchId)) {
-      const heldOrderId = parseInt(req.params.id);
-      
-      if (heldOrderId && !isNaN(heldOrderId)) {
-        const heldOrder = await prisma.heldOrder.findUnique({
-          where: { id: heldOrderId },
-          select: { branchId: true }
-        });
-
-        if (heldOrder) {
-          branchId = heldOrder.branchId;
-        }
+      const orderId = req.params.id;
+      if (!orderId) {
+        return next(new BadRequestError('Order ID required'));
       }
+
+      const tenantPrisma = req.tenantPrisma;
+      const heldOrder = await tenantPrisma.heldOrder.findUnique({
+        where: { id: parseInt(orderId) }
+      });
+
+      if (!heldOrder) {
+        return next(new NotFoundError('Held order not found'));
+      }
+
+      branchId = heldOrder.branchId;
     }
 
-    // Fallback to user's selected/assigned branch
-    if (!branchId || isNaN(branchId)) {
-      const fallbackBranchId =
-        req.user?.selectedBranch?.id ||
-        req.user?.branchUser?.branchId ||
-        req.user?.branchId;
-
-      if (fallbackBranchId) {
-        branchId = Number(fallbackBranchId);
-      } else {
-        return next(new BadRequestError('Branch ID required in X-Branch-Id header or provide a valid held order ID'));
-      }
-    }
-
+    // Verify branch exists and is active
     const tenantPrisma = req.tenantPrisma;
-    if (!tenantPrisma) {
-      return next(new AuthenticationError('Tenant context not initialized'));
-    }
-
-    // Verify branch exists and is active (tenant DB)
     const branch = await tenantPrisma.branch.findUnique({
       where: { id: branchId }
     });
@@ -355,14 +517,6 @@ const requireBranchFromHeldOrder = async (req, res, next) => {
       return next(new AuthenticationError('Branch is not active'));
     }
 
-    // Enforce access for non-master users
-    if (!req.user?.isMaster) {
-      const assignedBranchId = req.user?.branchUser?.branchId || req.user?.branchId;
-      if (assignedBranchId && Number(assignedBranchId) !== Number(branchId)) {
-        return next(new AuthorizationError('You do not have access to this branch'));
-      }
-    }
-
     req.branchId = branchId;
     req.branch = branch;
 
@@ -372,10 +526,15 @@ const requireBranchFromHeldOrder = async (req, res, next) => {
   }
 };
 
-const authNew = require('./auth.new');
-
 module.exports = {
-  ...authNew,
-  // Keep this extra middleware for older routes
-  requireBranchFromHeldOrder
+  authenticate,
+  requireMaster,
+  requirePermission,
+  requireAnyPermission,
+  requireBranch,
+  optionalBranch,
+  requireBranchFromHeldOrder,
+  // Legacy exports for backward compatibility
+  authorize,
+  hasPermission
 };

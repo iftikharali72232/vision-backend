@@ -20,6 +20,17 @@ router.get(
 );
 
 /**
+ * @route GET /api/v1/settings/:key
+ * @desc Get a specific setting by key
+ * @access Private - Admin/Owner
+ */
+router.get(
+  '/:key',
+  authorize('admin', 'owner', 'super_admin'),
+  settingController.getByKey
+);
+
+/**
  * @route PUT /api/v1/settings
  * @desc Update settings
  * @access Private - Admin/Owner

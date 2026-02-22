@@ -1,4 +1,5 @@
-const prisma = require('../config/database');
+const { getCurrentPrisma } = require('../middlewares/requestContext');
+const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { pagination: paginationConfig } = require('../config/constants');
 const { NotFoundError, AppError, InsufficientStockError, BadRequestError } = require('../middlewares/errorHandler');
 
@@ -603,13 +604,15 @@ class OrderService {
     // Handle held order ID - can be heldOrderId or hold_id
     let finalHeldOrderId = heldOrderId || hold_id;
 
-    // Validate held order exists if provided
+    // Validate held order exists if provided — if not found, ignore and proceed
     if (finalHeldOrderId) {
-      const heldOrder = await prisma.heldOrder.findUnique({
-        where: { id: finalHeldOrderId }
+      const heldOrder = await prisma.heldOrder.findFirst({
+        where: { id: finalHeldOrderId, branchId }
       });
       if (!heldOrder) {
-        throw new NotFoundError(`Held order #${finalHeldOrderId} not found`);
+        // Previously this threw NotFoundError; change: ignore missing held order
+        // so order creation proceeds normally even if hold reference is stale.
+        finalHeldOrderId = null;
       }
     }
 

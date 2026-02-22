@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const systemMenuController = require('../controllers/systemMenu.controller');
-const { authenticate, requireMaster } = require('../middlewares/auth.new');
+const { authenticate, requireMaster } = require('../middlewares/auth');
 
 // All routes require authentication
 router.use(authenticate);

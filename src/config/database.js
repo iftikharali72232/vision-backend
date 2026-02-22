@@ -176,42 +176,15 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// ================== LEGACY COMPATIBILITY ==================
-// For backward compatibility with existing code
-// Many services do: const prisma = require('../config/database')
-// and then call: prisma.notification.findMany(...)
-// So module.exports MUST be an actual PrismaClient instance.
-
-const masterPrisma = systemPrisma;
-
-function getTenantPrismaByDbName(dbName) {
-  return getTenantPrisma(dbName);
-}
-
-// ================== DEFAULT TENANT CLIENT ==================
-// Create a default tenant client for backward compatibility
-// Services that use `const prisma = require('./database')` get this client
-// The auth middleware sets req.tenantPrisma for per-request tenant isolation
-
-const DEFAULT_TENANT_DB = process.env.DEFAULT_TENANT_DB || 'restaurant_tenant';
-const defaultTenantPrisma = getTenantPrisma(DEFAULT_TENANT_DB);
-
 // ================== EXPORTS ==================
-// Export the default tenant PrismaClient as module.exports
-// This makes: const prisma = require('../config/database') return a real PrismaClient
-// Named exports are attached as properties for destructuring
 
-module.exports = defaultTenantPrisma;
-
-// Attach named exports as properties (for destructuring imports)
-module.exports.systemPrisma = systemPrisma;
-module.exports.getTenantPrisma = getTenantPrisma;
-module.exports.getTenantPrismaByCompanyId = getTenantPrismaByCompanyId;
-module.exports.closeAllConnections = closeAllConnections;
-module.exports.removeTenantClient = removeTenantClient;
-module.exports.parseMysqlUrl = parseMysqlUrl;
-module.exports.buildTenantDatabaseUrl = buildTenantDatabaseUrl;
-module.exports.buildTenantDbName = buildTenantDbName;
-module.exports.masterPrisma = masterPrisma;
-module.exports.prisma = defaultTenantPrisma;
-module.exports.getTenantPrismaByDbName = getTenantPrismaByDbName;
+module.exports = {
+  systemPrisma,
+  getTenantPrisma,
+  getTenantPrismaByCompanyId,
+  closeAllConnections,
+  removeTenantClient,
+  parseMysqlUrl,
+  buildTenantDatabaseUrl,
+  buildTenantDbName
+};
