@@ -526,7 +526,7 @@ model Order {
   id              Int           @id @default(autoincrement())
   branchId        Int           @map("branch_id")
   customerId      Int?          @map("customer_id")
-  userId          Int           @map("user_id") // References branch_users.id
+  userId          Int?          @map("user_id") // References branch_users.id
   tableId         Int?          @map("table_id")
   orderNumber     String        @unique @map("order_number") @db.VarChar(50)
   orderType       OrderType     @default(dine_in) @map("order_type")
@@ -562,7 +562,7 @@ model Order {
   // Relations
   branch      Branch       @relation(fields: [branchId], references: [id])
   customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  user        BranchUser   @relation(fields: [userId], references: [id])
+  user        BranchUser?  @relation(fields: [userId], references: [id])
   table       Table?       @relation(fields: [tableId], references: [id], onDelete: SetNull)
   cancelledBy BranchUser?  @relation("CancelledBy", fields: [cancelledById], references: [id])
   refundedBy  BranchUser?  @relation("RefundedBy", fields: [refundedById], references: [id])
@@ -628,7 +628,7 @@ model OrderPayment {
 model HeldOrder {
   id         Int       @id @default(autoincrement())
   branchId   Int       @map("branch_id")
-  userId     Int       @map("user_id")
+  userId     Int?      @map("user_id")
   customerId Int?      @map("customer_id")
   tableId    Int?      @map("table_id")
   orderType  OrderType @default(dine_in) @map("order_type")
@@ -644,7 +644,7 @@ model HeldOrder {
 
   // Relations
   branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  user     BranchUser      @relation(fields: [userId], references: [id])
+  user     BranchUser?     @relation(fields: [userId], references: [id])
   customer Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   table    Table?          @relation(fields: [tableId], references: [id], onDelete: SetNull)
   order    Order?

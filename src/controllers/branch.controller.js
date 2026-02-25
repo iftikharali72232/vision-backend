@@ -12,7 +12,7 @@ class BranchController {
    */
   async getBranches(req, res, next) {
     try {
-      const data = await branchService.getBranches(req.tenantDb, req.query);
+      const data = await branchService.getBranches(req.query);
 
       res.json({
         success: true,
@@ -30,7 +30,7 @@ class BranchController {
    */
   async getBranchById(req, res, next) {
     try {
-      const data = await branchService.getBranchById(req.tenantDb, req.params.id);
+      const data = await branchService.getBranchById(req.params.id);
 
       res.json({
         success: true,
@@ -47,7 +47,7 @@ class BranchController {
    */
   async createBranch(req, res, next) {
     try {
-      const data = await branchService.createBranch(req.tenantDb, req.body);
+      const data = await branchService.createBranch(req.body);
 
       res.status(201).json({
         success: true,
@@ -65,7 +65,7 @@ class BranchController {
    */
   async updateBranch(req, res, next) {
     try {
-      const data = await branchService.updateBranch(req.tenantDb, req.params.id, req.body);
+      const data = await branchService.updateBranch(req.params.id, req.body);
 
       res.json({
         success: true,
@@ -83,7 +83,7 @@ class BranchController {
    */
   async deleteBranch(req, res, next) {
     try {
-      await branchService.deleteBranch(req.tenantDb, req.params.id);
+      await branchService.deleteBranch(req.params.id);
 
       res.json({
         success: true,
@@ -100,7 +100,7 @@ class BranchController {
    */
   async getBranchStats(req, res, next) {
     try {
-      const data = await branchService.getBranchStats(req.tenantDb, req.params.id);
+      const data = await branchService.getBranchStats(req.params.id);
 
       res.json({
         success: true,
@@ -118,7 +118,6 @@ class BranchController {
   async addUserToBranch(req, res, next) {
     try {
       const data = await branchService.addUserToBranch(
-        req.tenantDb,
         req.user.companyId,
         req.params.id,
         req.body
@@ -141,7 +140,6 @@ class BranchController {
   async removeUserFromBranch(req, res, next) {
     try {
       await branchService.removeUserFromBranch(
-        req.tenantDb,
         req.params.id,
         req.params.userId
       );
@@ -162,7 +160,6 @@ class BranchController {
   async updateBranchUserRole(req, res, next) {
     try {
       const data = await branchService.updateBranchUserRole(
-        req.tenantDb,
         req.user.companyId,
         req.params.id,
         req.params.userId,

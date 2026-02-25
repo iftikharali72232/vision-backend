@@ -12,7 +12,7 @@ class PrinterController {
    */
   async getPrinters(req, res, next) {
     try {
-      const data = await printerService.getPrinters(req.tenantDb, req.user.branchId);
+      const data = await printerService.getPrinters(req.tenantDb, req.branchId);
 
       res.json({
         success: true,
@@ -31,7 +31,7 @@ class PrinterController {
     try {
       const data = await printerService.getPrinterById(
         req.tenantDb,
-        req.user.branchId,
+        req.branchId,
         req.params.id
       );
 
@@ -52,7 +52,7 @@ class PrinterController {
     try {
       const data = await printerService.createPrinter(
         req.tenantDb,
-        req.user.branchId,
+        req.branchId,
         req.body
       );
 
@@ -74,7 +74,7 @@ class PrinterController {
     try {
       const data = await printerService.updatePrinter(
         req.tenantDb,
-        req.user.branchId,
+        req.branchId,
         req.params.id,
         req.body
       );
@@ -97,7 +97,7 @@ class PrinterController {
     try {
       await printerService.deletePrinter(
         req.tenantDb,
-        req.user.branchId,
+        req.branchId,
         req.params.id
       );
 
@@ -118,7 +118,7 @@ class PrinterController {
     try {
       const data = await printerService.testPrinter(
         req.tenantDb,
-        req.user.branchId,
+        req.branchId,
         req.params.id
       );
 
@@ -157,7 +157,7 @@ class PrinterController {
     try {
       const printer = await printerService.getPrinterById(
         req.tenantDb,
-        req.user.branchId,
+        req.branchId,
         req.params.id
       );
 

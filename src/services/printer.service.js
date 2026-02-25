@@ -13,8 +13,13 @@ class PrinterService {
   async getPrinters(tenantDb, branchId) {
     const tenantPrisma = getTenantPrisma(tenantDb);
     
+    const where = {};
+    if (branchId) {
+      where.branchId = parseInt(branchId);
+    }
+    
     const printers = await tenantPrisma.printer.findMany({
-      where: { branchId: parseInt(branchId) },
+      where,
       orderBy: { createdAt: 'desc' }
     });
 
@@ -70,11 +75,17 @@ class PrinterService {
    */
   async createPrinter(tenantDb, branchId, data) {
     const tenantPrisma = getTenantPrisma(tenantDb);
+    
+    if (!branchId) {
+      throw new BadRequestError('Branch ID is required');
+    }
 
-    // If this is set as default, unset other defaults
+    // If this is set as default, unset other defaults in the same branch
     if (data.isDefault) {
+      const where = { isDefault: true };
+      where.branchId = parseInt(branchId);
       await tenantPrisma.printer.updateMany({
-        where: { branchId: parseInt(branchId), isDefault: true },
+        where,
         data: { isDefault: false }
       });
     }
@@ -126,14 +137,17 @@ class PrinterService {
       throw new NotFoundError('Printer');
     }
 
-    // If this is set as default, unset other defaults
+    if (!branchId) {
+      throw new BadRequestError('Branch ID is required');
+    }
+
+    // If this is set as default, unset other defaults in the same branch
     if (data.isDefault) {
+      const where = { isDefault: true };
+      where.branchId = parseInt(branchId);
+      where.id = { not: parseInt(printerId) };
       await tenantPrisma.printer.updateMany({
-        where: { 
-          branchId: parseInt(branchId), 
-          isDefault: true,
-          id: { not: parseInt(printerId) }
-        },
+        where,
         data: { isDefault: false }
       });
     }

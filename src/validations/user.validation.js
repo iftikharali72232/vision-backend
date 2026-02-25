@@ -18,9 +18,9 @@ const createUser = [
       }
       return true;
     }),
-  body('role')
+  body('role_id')
     .notEmpty().withMessage('Role is required')
-    .isIn(['admin', 'manager', 'cashier']).withMessage('Invalid role'),
+    .isInt({ min: 1 }).withMessage('Invalid role'),
   body('phone')
     .optional()
     .isLength({ max: 50 }).withMessage('Phone must not exceed 50 characters'),
@@ -41,9 +41,9 @@ const updateUser = [
   body('email')
     .optional()
     .isEmail().withMessage('Invalid email format'),
-  body('role')
+  body('role_id')
     .optional()
-    .isIn(['admin', 'manager', 'cashier']).withMessage('Invalid role'),
+    .isInt({ min: 1 }).withMessage('Invalid role'),
   body('phone')
     .optional()
     .isLength({ max: 50 }).withMessage('Phone must not exceed 50 characters'),

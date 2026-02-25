@@ -326,16 +326,12 @@ class TableService {
       
       tables: hall.tables.map(table => ({
         id: table.id,
-        number: table.number,
         name: table.name,
         capacity: table.capacity,
         status: table.status,
         shape: table.shape,
         position_x: table.positionX,
         position_y: table.positionY,
-        width: table.width,
-        height: table.height,
-        rotation: table.rotation,
         active_orders: table.orders.map(o => ({
           id: o.id,
           order_number: o.orderNumber,
@@ -408,17 +404,11 @@ class TableService {
   async createTable(data, branchId) {
     const {
       hall_id,
-      number,
       name,
       capacity = 4,
-      min_capacity,
-      max_capacity,
       shape = 'rectangle',
       position_x,
       position_y,
-      width,
-      height,
-      rotation = 0,
       sort_order,
       is_active = true
     } = data;
@@ -430,15 +420,6 @@ class TableService {
 
     if (!hall) {
       throw new NotFoundError('Hall');
-    }
-
-    // Check for duplicate table number in branch
-    const existing = await prisma.table.findFirst({
-      where: { branchId, number }
-    });
-
-    if (existing) {
-      throw new AppError('Table with this number already exists', 400, 'TABLE_EXISTS');
     }
 
     // Get max sort order if not provided
@@ -455,18 +436,12 @@ class TableService {
       data: {
         branchId,
         hallId: hall_id,
-        number,
         name,
         capacity,
-        minCapacity: min_capacity || capacity,
-        maxCapacity: max_capacity || capacity,
         status: 'available',
         shape,
         positionX: position_x,
         positionY: position_y,
-        width,
-        height,
-        rotation,
         displayOrder,
         isActive: is_active
       },
@@ -492,17 +467,11 @@ class TableService {
 
     const {
       hall_id,
-      number,
       name,
       capacity,
-      min_capacity,
-      max_capacity,
       shape,
       position_x,
       position_y,
-      width,
-      height,
-      rotation,
       sort_order,
       is_active
     } = data;
@@ -518,32 +487,15 @@ class TableService {
       }
     }
 
-    // Check for duplicate number if changing
-    if (number && number !== table.number) {
-      const existing = await prisma.table.findFirst({
-        where: { branchId, number, id: { not: parseInt(id) } }
-      });
-
-      if (existing) {
-        throw new AppError('Table with this number already exists', 400, 'TABLE_EXISTS');
-      }
-    }
-
     const updatedTable = await prisma.table.update({
       where: { id: parseInt(id) },
       data: {
         hallId: hall_id,
-        number,
         name,
         capacity,
-        minCapacity: min_capacity,
-        maxCapacity: max_capacity,
         shape,
         positionX: position_x,
         positionY: position_y,
-        width,
-        height,
-        rotation,
         displayOrder: sort_order,
         isActive: is_active
       },
@@ -579,7 +531,6 @@ class TableService {
 
     return {
       id: updatedTable.id,
-      number: updatedTable.number,
       status: updatedTable.status
     };
   }
@@ -732,18 +683,12 @@ class TableService {
     return {
       id: table.id,
       hall: table.hall,
-      number: table.number,
       name: table.name,
       capacity: table.capacity,
-      min_capacity: table.minCapacity,
-      max_capacity: table.maxCapacity,
       status: table.status,
       shape: table.shape,
       position_x: table.positionX,
       position_y: table.positionY,
-      width: table.width,
-      height: table.height,
-      rotation: table.rotation,
       is_active: table.isActive,
       sort_order: table.displayOrder,
       orders_count: table._count?.orders || 0,

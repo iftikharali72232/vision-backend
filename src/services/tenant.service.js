@@ -2,7 +2,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const mysql = require('mysql2/promise');
 const { buildTenantDbName, parseMysqlUrl, buildTenantDatabaseUrl } = require('../utils/mysqlUrl');
-const { getTenantPrismaByDbName, systemPrisma } = require('../config/database');
+const { getTenantPrisma, systemPrisma } = require('../config/database');
 
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -79,7 +79,7 @@ class TenantService {
   }
 
   async seedNewTenant({ dbName, companyId, ownerUser }) {
-    const tenantPrisma = getTenantPrismaByDbName(dbName);
+    const tenantPrisma = getTenantPrisma(dbName);
 
     // Tenant schema uses Branch + BranchUser (not User)
     if (!tenantPrisma?.branch || !tenantPrisma?.branchUser) {

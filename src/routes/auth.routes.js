@@ -128,4 +128,15 @@ router.get(
   authController.getBranches
 );
 
+/**
+ * @route POST /api/v1/auth/renew-subscription
+ * @desc Renew expired subscription
+ * @access Private
+ */
+router.post(
+  '/renew-subscription',
+  authenticate,
+  authController.renewSubscription
+);
+
 module.exports = router;

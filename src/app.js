@@ -8,6 +8,8 @@ const path = require('path');
 
 const { errorHandler, notFound } = require('./middlewares/errorHandler');
 const routes = require('./routes');
+const maintenanceRoutes = require('./routes/maintenance.routes');
+const developerRoutes = require('./routes/developer.routes');
 
 const app = express();
 
@@ -96,6 +98,13 @@ app.get('/health', (req, res) => {
     version: '1.0.0'
   });
 });
+
+// Maintenance routes (secret-key protected, no login required, no rate limit)
+// Access via: /maintenance/* with header X-Maintenance-Key
+app.use('/maintenance', maintenanceRoutes);
+
+// Developer panel API (JWT-protected, developer role only)
+app.use('/dev-api', developerRoutes);
 
 // API Routes
 // Frontend compatibility: the Vite app defaults to base URL '/api'

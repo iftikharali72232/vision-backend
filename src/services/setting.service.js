@@ -61,6 +61,12 @@ class SettingService {
       };
     }
 
+    if (!result.payment_methods || Object.keys(result.payment_methods).length === 0) {
+      result.payment_methods = {
+        enabled: ['cash', 'card', 'online', 'split', 'wallet']
+      };
+    }
+
     return result;
   }
 
@@ -102,6 +108,13 @@ class SettingService {
       });
     }
 
+    if (data.payment_methods) {
+      await this.upsertSetting('payment_methods', {
+        ...(currentSettings.payment_methods || {}),
+        ...data.payment_methods
+      });
+    }
+
     // Return updated settings
     return this.getSettings();
   }
@@ -121,12 +134,17 @@ class SettingService {
    * Get a specific setting
    */
   async getSetting(key) {
+    // Return null if key is undefined or null
+    if (!key || key === 'undefined' || key === 'null') {
+      return null;
+    }
+
     const setting = await prisma.setting.findUnique({
       where: { key }
     });
 
     if (!setting) {
-      throw new NotFoundError('Setting');
+      return null; // Return null instead of throwing error
     }
 
     return setting.value;

@@ -468,6 +468,41 @@ async function seedSystemSettings() {
   console.log(`✅ Created ${systemSettings.length} system settings`);
 }
 
+// ================== SUBSCRIPTION PLANS ==================
+
+async function seedSubscriptionPlans() {
+  console.log('📋 Seeding subscription plans...');
+
+  const plans = [
+    {
+      name: 'Basic',
+      code: 'basic',
+      description: 'POS only - No accounting features',
+      features: ['pos', 'inventory', 'sales', 'customers', 'reports'],
+      monthlyPrice: 5000.00,
+      yearlyPrice: 50000.00
+    },
+    {
+      name: 'Pro',
+      code: 'pro',
+      description: 'Full system with accounting',
+      features: ['pos', 'inventory', 'sales', 'customers', 'reports', 'accounting', 'journals', 'financial-reports'],
+      monthlyPrice: 10000.00,
+      yearlyPrice: 100000.00
+    }
+  ];
+
+  for (const plan of plans) {
+    await prisma.subscriptionPlan.upsert({
+      where: { code: plan.code },
+      update: plan,
+      create: plan
+    });
+  }
+
+  console.log('✅ Subscription plans seeded');
+}
+
 // ================== MAIN ==================
 
 async function main() {
@@ -479,6 +514,7 @@ async function main() {
     await seedPaymentMethodTemplates();
     await seedPrinterTemplates();
     await seedSystemSettings();
+    await seedSubscriptionPlans();
 
     console.log('\n✅ System database seeded successfully!\n');
   } catch (error) {

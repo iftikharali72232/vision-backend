@@ -1,8 +1,9 @@
 const bcrypt = require('bcryptjs');
+const { systemPrisma } = require('../config/database');
 const { getCurrentPrisma } = require('../middlewares/requestContext');
 const prisma = new Proxy({}, { get: (_, prop) => getCurrentPrisma()[prop] });
 const { bcrypt: bcryptConfig, pagination: paginationConfig } = require('../config/constants');
-const { NotFoundError, ConflictError } = require('../middlewares/errorHandler');
+const { NotFoundError, ConflictError, BadRequestError } = require('../middlewares/errorHandler');
 
 class UserService {
   /**
@@ -34,9 +35,7 @@ class UserService {
     }
 
     if (role) {
-      where.branchAccess = {
-        some: { role: role }
-      };
+      where.roleId = parseInt(role);
     }
 
     if (status) {
@@ -44,9 +43,7 @@ class UserService {
     }
 
     if (branch_id) {
-      where.branchAccess = {
-        some: { branchId: parseInt(branch_id) }
-      };
+      where.branchId = parseInt(branch_id);
     }
 
     // Build order by
@@ -56,42 +53,46 @@ class UserService {
 
     // Get users and count
     const [users, total] = await Promise.all([
-      prisma.user.findMany({
+      prisma.branchUser.findMany({
         where,
         skip,
         take,
         orderBy,
         include: {
-          branchAccess: {
-            include: {
-              branch: {
-                select: { id: true, name: true }
-              }
-            }
+          branch: {
+            select: { id: true, name: true }
           }
         }
       }),
-      prisma.user.count({ where })
+      prisma.branchUser.count({ where })
     ]);
+
+    // Get role names from system database
+    const roleIds = [...new Set(users.map(u => u.roleId))];
+    const roles = await systemPrisma.role.findMany({
+      where: { id: { in: roleIds } },
+      select: { id: true, name: true, code: true }
+    });
+    const roleMap = Object.fromEntries(roles.map(r => [r.id, r]));
 
     // Format response
     const items = users.map(user => {
-      const primaryAccess = user.branchAccess[0];
+      const role = roleMap[user.roleId];
       return {
         id: user.id,
+        system_user_id: user.systemUserId,
         name: user.name,
         email: user.email,
-        role: primaryAccess?.role || 'cashier',
-        role_name: this.getRoleName(primaryAccess?.role),
+        role_id: user.roleId,
+        role_code: role?.code || 'unknown',
+        role_name: role?.name || 'Unknown',
         phone: user.phone,
         avatar: user.avatar,
         is_active: user.isActive,
-        branches: user.branchAccess.map(ub => ({
-          id: ub.branch.id,
-          name: ub.branch.name,
-          role: ub.role
-        })),
-        last_login_at: user.lastLoginAt,
+        branch: {
+          id: user.branch.id,
+          name: user.branch.name
+        },
         created_at: user.createdAt
       };
     });
@@ -108,46 +109,51 @@ class UserService {
   }
 
   /**
-   * Get user by ID
+   * Get user by ID (branch user ID or system user ID)
    */
-  async getUserById(id) {
-    const user = await prisma.user.findUnique({
+  async getUserById(companyId, tenantDb, id) {
+    // Try to find by branch user ID first
+    let user = await prisma.branchUser.findUnique({
       where: { id: parseInt(id) },
       include: {
-        branchAccess: {
-          include: {
-            branch: { select: { id: true, name: true } }
-          }
-        }
+        branch: { select: { id: true, name: true } }
       }
     });
+
+    // If not found, try finding by system user ID
+    if (!user) {
+      user = await prisma.branchUser.findFirst({
+        where: { systemUserId: parseInt(id) },
+        include: {
+          branch: { select: { id: true, name: true } }
+        }
+      });
+    }
 
     if (!user) {
       throw new NotFoundError('User');
     }
 
-    // Get user stats
-    const stats = await this.getUserStats(user.id);
-    const primaryAccess = user.branchAccess[0];
-    const role = primaryAccess?.role || 'cashier';
+    // Get role from system database
+    const role = await systemPrisma.role.findUnique({
+      where: { id: user.roleId }
+    });
 
     return {
       id: user.id,
+      system_user_id: user.systemUserId,
       name: user.name,
       email: user.email,
-      role: role,
-      role_name: this.getRoleName(role),
+      role_id: user.roleId,
+      role_code: role?.code || 'unknown',
+      role_name: role?.name || 'Unknown',
       phone: user.phone,
       avatar: user.avatar,
       is_active: user.isActive,
-      branches: user.branchAccess.map(ub => ({
-        id: ub.branch.id,
-        name: ub.branch.name,
-        role: ub.role
-      })),
-      permissions: this.getPermissions(role),
-      stats,
-      last_login_at: user.lastLoginAt,
+      branch: {
+        id: user.branch.id,
+        name: user.branch.name
+      },
       created_at: user.createdAt,
       updated_at: user.updatedAt
     };
@@ -156,60 +162,90 @@ class UserService {
   /**
    * Create new user
    */
-  async createUser(data) {
-    const { name, email, password, role = 'cashier', phone, branch_ids = [], is_active = true } = data;
+  async createUser(companyId, tenantDb, data) {
+    const { name, email, password, role_id, phone, branch_ids = [], is_active = true } = data;
 
-    // Check if email exists
-    const existingUser = await prisma.user.findUnique({
+    // Get role from system database
+    const role = await systemPrisma.role.findUnique({
+      where: { id: parseInt(role_id) }
+    });
+
+    if (!role) {
+      throw new BadRequestError('Invalid role');
+    }
+
+    // Check if user exists in system database first
+    let systemUser = await systemPrisma.systemUser.findUnique({
       where: { email }
     });
 
-    if (existingUser) {
-      throw new ConflictError('User with this email already exists');
+    // If no system user exists, create one
+    if (!systemUser) {
+      const hashedPassword = await bcrypt.hash(password, bcryptConfig.saltRounds);
+      systemUser = await systemPrisma.systemUser.create({
+        data: {
+          companyId,
+          email,
+          password: hashedPassword,
+          name,
+          phone,
+          status: 'active',
+          isMaster: false
+        }
+      });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, bcryptConfig.saltRounds);
+    // Check if branch user already exists
+    if (branch_ids.length > 0) {
+      const existingBranchUser = await prisma.branchUser.findFirst({
+        where: {
+          systemUserId: systemUser.id,
+          branchId: { in: branch_ids.map(id => parseInt(id)) }
+        }
+      });
 
-    // Create user with branch access
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        phone,
-        isActive: is_active,
-        isVerified: true, // Admin-created users are verified
-        branchAccess: {
-          create: branch_ids.map(branchId => ({
-            branchId: parseInt(branchId),
-            role: role,
-            isActive: true
-          }))
-        }
-      },
-      include: {
-        branchAccess: {
-          include: {
-            branch: { select: { id: true, name: true } }
-          }
-        }
+      if (existingBranchUser) {
+        throw new ConflictError('User is already assigned to one of the selected branches');
       }
-    });
+    }
+
+    // Create branch users for each branch
+    const branchUsers = [];
+    for (const branchId of branch_ids) {
+      const branchUser = await prisma.branchUser.create({
+        data: {
+          branchId: parseInt(branchId),
+          systemUserId: systemUser.id,
+          roleId: role.id,
+          name,
+          email,
+          phone,
+          isActive: is_active
+        },
+        include: {
+          branch: { select: { id: true, name: true } }
+        }
+      });
+      branchUsers.push(branchUser);
+    }
+
+    const primaryBranchUser = branchUsers[0];
 
     return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: role,
-      phone: user.phone,
-      is_active: user.isActive,
-      branches: user.branchAccess.map(ub => ({
-        id: ub.branch.id,
-        name: ub.branch.name,
-        role: ub.role
+      id: primaryBranchUser.id,
+      system_user_id: systemUser.id,
+      name: primaryBranchUser.name,
+      email: primaryBranchUser.email,
+      role_id: role.id,
+      role_code: role.code,
+      role_name: role.name,
+      phone: primaryBranchUser.phone,
+      is_active: primaryBranchUser.isActive,
+      branches: branchUsers.map(bu => ({
+        id: bu.branch.id,
+        name: bu.branch.name
       })),
-      created_at: user.createdAt
+      created_at: primaryBranchUser.createdAt
     };
   }
 
@@ -218,10 +254,21 @@ class UserService {
    */
   async updateUser(id, data) {
     const userId = parseInt(id);
-    const { name, email, role, phone, branch_ids, is_active } = data;
+    const { name, email, role_id, phone, branch_ids, is_active } = data;
+
+    // Get role if role_id is provided
+    let role = null;
+    if (role_id) {
+      role = await systemPrisma.role.findUnique({
+        where: { id: parseInt(role_id) }
+      });
+      if (!role) {
+        throw new BadRequestError('Invalid role');
+      }
+    }
 
     // Check if user exists
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await prisma.branchUser.findUnique({
       where: { id: userId }
     });
 
@@ -229,75 +276,55 @@ class UserService {
       throw new NotFoundError('User');
     }
 
-    // Check if email is taken by another user
+    // Check if email is taken by another user in the same branch
     if (email && email !== existingUser.email) {
-      const emailTaken = await prisma.user.findUnique({
-        where: { email }
+      const emailTaken = await prisma.branchUser.findFirst({
+        where: {
+          email,
+          branchId: existingUser.branchId,
+          id: { not: userId }
+        }
       });
       if (emailTaken) {
-        throw new ConflictError('Email is already taken');
+        throw new ConflictError('Email is already taken by another user in this branch');
       }
     }
 
-    // Update user
+    // Update branch user
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (email !== undefined) updateData.email = email;
     if (phone !== undefined) updateData.phone = phone;
     if (is_active !== undefined) updateData.isActive = is_active;
+    if (role_id !== undefined) updateData.roleId = parseInt(role_id);
 
-    // Update branches if provided
-    if (branch_ids !== undefined) {
-      // Delete existing branch access
-      await prisma.userBranchAccess.deleteMany({
-        where: { userId }
-      });
-
-      // Create new branch access
-      if (branch_ids.length > 0) {
-        await prisma.userBranchAccess.createMany({
-          data: branch_ids.map(branchId => ({
-            userId,
-            branchId: parseInt(branchId),
-            role: role || 'cashier',
-            isActive: true
-          }))
-        });
-      }
-    } else if (role) {
-      // If only role is provided, update existing branch access roles
-      await prisma.userBranchAccess.updateMany({
-        where: { userId },
-        data: { role: role }
-      });
-    }
-
-    const user = await prisma.user.update({
+    const user = await prisma.branchUser.update({
       where: { id: userId },
       data: updateData,
       include: {
-        branchAccess: {
-          include: {
-            branch: { select: { id: true, name: true } }
-          }
-        }
+        branch: { select: { id: true, name: true } }
       }
     });
 
-    const primaryAccess = user.branchAccess[0];
+    // Get updated role
+    const updatedRole = role || await systemPrisma.role.findUnique({
+      where: { id: user.roleId }
+    });
 
     return {
       id: user.id,
+      system_user_id: user.systemUserId,
       name: user.name,
       email: user.email,
-      role: primaryAccess?.role || 'cashier',
+      role_id: user.roleId,
+      role_code: updatedRole?.code || 'unknown',
+      role_name: updatedRole?.name || 'Unknown',
       phone: user.phone,
       is_active: user.isActive,
-      branches: user.branchAccess.map(ub => ({
-        id: ub.branch.id,
-        name: ub.branch.name,
-        role: ub.role
-      })),
+      branch: {
+        id: user.branch.id,
+        name: user.branch.name
+      },
       updated_at: user.updatedAt
     };
   }
@@ -308,7 +335,7 @@ class UserService {
   async deleteUser(id) {
     const userId = parseInt(id);
 
-    const user = await prisma.user.findUnique({
+    const user = await prisma.branchUser.findUnique({
       where: { id: userId }
     });
 
@@ -316,7 +343,7 @@ class UserService {
       throw new NotFoundError('User');
     }
 
-    await prisma.user.delete({
+    await prisma.branchUser.delete({
       where: { id: userId }
     });
 

@@ -186,11 +186,23 @@ class AuthController {
   }
 
   /**
-   * Get user's accessible branches
-   * GET /auth/branches
-   * Public: returns empty (branches come after login)
-   * Authenticated: returns user's branches
+   * Renew subscription
+   * POST /auth/renew-subscription
    */
+  async renewSubscription(req, res, next) {
+    try {
+      const { payment_method } = req.body;
+      const data = await authService.renewSubscription(req.tokenData, payment_method);
+
+      res.json({
+        success: true,
+        message: 'Subscription renewed successfully',
+        data
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
   async getBranches(req, res, next) {
     try {
       // If not authenticated, return empty (branches come after login in multi-tenant)

@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { systemPrisma, getTenantPrisma } = require('../config/database');
+const { asyncLocalStorage } = require('./requestContext');
 const { AuthenticationError, AuthorizationError, BadRequestError } = require('./errorHandler');
 const { jwt: jwtConfig } = require('../config/constants');
 
@@ -209,7 +210,12 @@ const authenticate = async (req, res, next) => {
     req.token = token;
     req.tokenData = decoded;
 
-    next();
+    // Establish async-local storage context so services can call getCurrentPrisma()
+    asyncLocalStorage.run({
+      tenantPrisma: req.tenantPrisma,
+      branchId: req.user.branchId || null,
+      user: req.user
+    }, () => next());
   } catch (error) {
     if (error instanceof AuthenticationError) {
       next(error);

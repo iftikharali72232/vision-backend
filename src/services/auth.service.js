@@ -26,7 +26,11 @@ class AuthService {
     const systemUser = await systemPrisma.systemUser.findUnique({
       where: { email },
       include: {
-        company: true
+        company: {
+          include: {
+            plan: true
+          }
+        }
       }
     });
 
@@ -48,6 +52,48 @@ class AuthService {
       throw new AuthenticationError('Invalid email or password', 'AUTH_001');
     }
 
+    // ── Developer user: no company needed ───────────────────────────────────
+    if (systemUser.isDeveloper) {
+      const accessToken = this.generateToken({
+        userId: systemUser.id,
+        isDeveloper: true,
+        isMaster: false,
+      });
+      const expiresIn = this.getExpiresInSeconds();
+      await systemPrisma.token.create({
+        data: {
+          userId: systemUser.id,
+          token: accessToken,
+          type: 'access',
+          expiresAt: new Date(Date.now() + expiresIn * 1000)
+        }
+      });
+      await systemPrisma.systemUser.update({
+        where: { id: systemUser.id },
+        data: { lastLoginAt: new Date() }
+      });
+      return {
+        user: {
+          id: systemUser.id,
+          name: systemUser.name,
+          email: systemUser.email,
+          avatar: systemUser.avatar,
+          is_master: false,
+          is_developer: true,
+          status: systemUser.status,
+        },
+        company: null,
+        branches: [],
+        permissions: [],
+        role_id: 'developer',
+        token: accessToken,
+        token_type: 'Bearer',
+        expires_in: expiresIn,
+        default_branch_id: null,
+      };
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     // Get company and tenant data
     const company = systemUser.company;
     if (!company) {
@@ -56,6 +102,68 @@ class AuthService {
 
     if (company.status === 'inactive' || company.status === 'suspended') {
       throw new AppError('Your company account has been suspended', 403, 'AUTH_004');
+    }
+
+    // Check subscription expiry
+    const now = new Date();
+    const isSubscriptionExpired = company.subscriptionEndsAt && now > company.subscriptionEndsAt;
+    console.log('Subscription check:', { 
+      companyId: company.id, 
+      subscriptionEndsAt: company.subscriptionEndsAt, 
+      now: now.toISOString(), 
+      isExpired: isSubscriptionExpired 
+    });
+    if (isSubscriptionExpired) {
+      // Return login data with expired flag but still provide a token for renewal
+      const accessToken = this.generateToken({
+        userId: systemUser.id,
+        companyId: company.id,
+        tenantDb: company.tenantDb,
+        isMaster: systemUser.isMaster,
+        subscriptionExpired: true
+      });
+      const expiresIn = this.getExpiresInSeconds();
+      await systemPrisma.token.create({
+        data: {
+          userId: systemUser.id,
+          token: accessToken,
+          type: 'access',
+          expiresAt: new Date(Date.now() + expiresIn * 1000)
+        }
+      });
+      return {
+        user: {
+          id: systemUser.id,
+          name: systemUser.name,
+          email: systemUser.email,
+          phone: systemUser.phone,
+          avatar: systemUser.avatar,
+          is_master: systemUser.isMaster,
+          status: systemUser.status
+        },
+        company: {
+          id: company.id,
+          name: company.name,
+          slug: company.slug,
+          logo: company.logo,
+          status: company.status,
+          subscription_ends_at: company.subscriptionEndsAt,
+          plan: company.plan ? {
+            id: company.plan.id,
+            name: company.plan.name,
+            code: company.plan.code,
+            features: company.plan.features
+          } : null
+        },
+        branches: [],
+        permissions: [],
+        role_id: null,
+        token: accessToken,
+        token_type: 'Bearer',
+        expires_in: expiresIn,
+        default_branch_id: null,
+        subscription_expired: true
+      };
     }
 
     // Get tenant database connection
@@ -168,7 +276,13 @@ class AuthService {
         name: company.name,
         slug: company.slug,
         logo: company.logo,
-        status: company.status
+        status: company.status,
+        plan: company.plan ? {
+          id: company.plan.id,
+          name: company.plan.name,
+          code: company.plan.code,
+          features: company.plan.features
+        } : null
       },
       branches,
       permissions,
@@ -712,6 +826,95 @@ class AuthService {
       if (rp.canPrint) permissions.push(`${rp.menu.code}.print`);
     }
     return permissions;
+  }
+
+  /**
+   * Renew subscription for expired company
+   * @param {object} tokenData - JWT token data
+   * @param {string} paymentMethod - Payment method used
+   * @returns {object} Renewal result
+   */
+  async renewSubscription(tokenData, paymentMethod) {
+    // Get user and company with plan
+    const systemUser = await systemPrisma.systemUser.findUnique({
+      where: { id: tokenData.userId },
+      include: { 
+        company: {
+          include: { plan: true }
+        }
+      }
+    });
+
+    if (!systemUser || !systemUser.company) {
+      throw new AppError('User or company not found', 404, 'RENEW_001');
+    }
+
+    const company = systemUser.company;
+    const plan = company.plan;
+
+    if (!plan) {
+      throw new AppError('No subscription plan assigned to company', 400, 'RENEW_004');
+    }
+
+    // Check if subscription is actually expired
+    const now = new Date();
+    const isExpired = company.subscriptionEndsAt && now > company.subscriptionEndsAt;
+    if (!isExpired) {
+      throw new AppError('Subscription is not expired', 400, 'RENEW_002');
+    }
+
+    // For now, only cash payment is supported
+    if (paymentMethod !== 'cash') {
+      throw new AppError('Only cash payment is currently supported', 400, 'RENEW_003');
+    }
+
+    // Default to monthly renewal
+    const period = 'monthly';
+    const amount = plan.monthlyPrice;
+
+    // Calculate new expiry date (30 days for monthly)
+    const newExpiryDate = new Date();
+    newExpiryDate.setDate(newExpiryDate.getDate() + 30);
+
+    // Update company
+    const updatedCompany = await systemPrisma.company.update({
+      where: { id: company.id },
+      data: {
+        subscriptionEndsAt: newExpiryDate,
+        status: 'active' // Ensure status is active
+      }
+    });
+
+    // Record subscription history
+    await systemPrisma.subscriptionHistory.create({
+      data: {
+        companyId: company.id,
+        planId: plan.id,
+        amount: amount,
+        period: period,
+        paymentMethod: paymentMethod,
+        status: 'completed',
+        expiresAt: newExpiryDate
+      }
+    });
+
+    return {
+      company: {
+        id: updatedCompany.id,
+        name: updatedCompany.name,
+        subscription_ends_at: updatedCompany.subscriptionEndsAt,
+        status: updatedCompany.status,
+        plan: {
+          id: plan.id,
+          name: plan.name,
+          code: plan.code
+        }
+      },
+      renewed_until: updatedCompany.subscriptionEndsAt,
+      payment_method: paymentMethod,
+      amount: amount,
+      period: period
+    };
   }
 
   /**

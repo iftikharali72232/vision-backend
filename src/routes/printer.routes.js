@@ -6,10 +6,11 @@
 const express = require('express');
 const router = express.Router();
 const printerController = require('../controllers/printer.controller');
-const { authenticate, requirePermission } = require('../middlewares/auth');
+const { authenticate, requirePermission, requireBranch } = require('../middlewares/auth');
 
-// All routes require authentication
+// All routes require authentication and branch selection
 router.use(authenticate);
+router.use(requireBranch);
 
 /**
  * @route GET /api/v1/printers/discover

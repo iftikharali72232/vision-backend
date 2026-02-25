@@ -2,23 +2,10 @@ const inventoryService = require('../services/inventory.service');
 
 /**
  * Resolve the correct userId for inventory movements.
- * InventoryMovement.userId references BranchUser.id (tenant schema),
- * NOT SystemUser.id. For master users we look up their BranchUser record.
+ * InventoryMovement.userId references User.id (system users table) in schema.prisma.
+ * req.user.id is the system user ID, always available after authentication.
  */
-async function resolveUserId(req) {
-  // Non-master: branchUser is populated by auth middleware
-  if (req.user?.branchUser?.id) return req.user.branchUser.id;
-
-  // Master user: look up BranchUser by systemUserId in the current branch
-  const branchId = req.branchId || req.user?.branchId;
-  if (req.tenantPrisma && req.user?.id && branchId) {
-    const bu = await req.tenantPrisma.branchUser.findFirst({
-      where: { systemUserId: req.user.id, branchId: parseInt(branchId) }
-    });
-    if (bu) return bu.id;
-  }
-
-  // Absolute fallback – return systemUser.id (may cause FK error but better than undefined)
+function resolveUserId(req) {
   return req.user?.id;
 }
 
@@ -36,7 +23,7 @@ class InventoryController {
   async adjustStock(req, res, next) {
     try {
       const branchId = req.branchId || req.user?.branchId;
-      const userId = await resolveUserId(req);
+      const userId = resolveUserId(req);
       const result = await inventoryService.adjustStock(req.params.productId, req.body, userId, branchId);
       res.json({ success: true, data: result });
     } catch (error) {
@@ -47,7 +34,7 @@ class InventoryController {
   async bulkAdjustStock(req, res, next) {
     try {
       const branchId = req.branchId || req.user?.branchId;
-      const userId = await resolveUserId(req);
+      const userId = resolveUserId(req);
       const result = await inventoryService.bulkAdjustStock(req.body.adjustments, userId, branchId);
       res.json({ success: true, data: result });
     } catch (error) {
@@ -58,7 +45,7 @@ class InventoryController {
   async transferStock(req, res, next) {
     try {
       const branchId = req.branchId || req.user?.branchId;
-      const userId = await resolveUserId(req);
+      const userId = resolveUserId(req);
       const result = await inventoryService.transferStock(req.body, userId, branchId);
       res.json({ success: true, data: result });
     } catch (error) {
@@ -109,7 +96,7 @@ class InventoryController {
   async startStockTake(req, res, next) {
     try {
       const branchId = req.branchId || req.user?.branchId;
-      const userId = await resolveUserId(req);
+      const userId = resolveUserId(req);
       const result = await inventoryService.startStockTake(req.body || {}, userId, branchId);
       res.json({ success: true, data: result });
     } catch (error) {
@@ -120,7 +107,7 @@ class InventoryController {
   async submitStockTake(req, res, next) {
     try {
       const branchId = req.branchId || req.user?.branchId;
-      const userId = await resolveUserId(req);
+      const userId = resolveUserId(req);
       const result = await inventoryService.submitStockTake(req.body, userId, branchId);
       res.json({ success: true, data: result });
     } catch (error) {

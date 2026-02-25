@@ -125,7 +125,6 @@ class BranchService {
         }
       }
     });
-
     return {
       id: branch.id,
       name: branch.name,
@@ -220,8 +219,8 @@ class BranchService {
     today.setHours(0, 0, 0, 0);
 
     const [usersCount, productsCount, todayStats] = await Promise.all([
-      prisma.userBranch.count({ where: { branchId } }),
-      prisma.productStock.count({ where: { branchId, stockQuantity: { gt: 0 } } }),
+      prisma.branchUser.count({ where: { branchId } }),
+      prisma.productStock.count({ where: { branchId, stockQuantity: { gt: 0 } } }).catch(() => 0),
       prisma.order.aggregate({
         where: {
           branchId,
@@ -230,14 +229,14 @@ class BranchService {
         },
         _sum: { total: true },
         _count: true
-      })
+      }).catch(() => ({ _sum: { total: 0 }, _count: 0 }))
     ]);
 
     return {
-      total_users: usersCount,
-      total_products: productsCount,
-      today_sales: Number(todayStats._sum.total || 0),
-      today_orders: todayStats._count
+      total_users: usersCount || 0,
+      total_products: productsCount || 0,
+      today_sales: Number(todayStats?._sum?.total || 0),
+      today_orders: todayStats?._count || 0
     };
   }
 }

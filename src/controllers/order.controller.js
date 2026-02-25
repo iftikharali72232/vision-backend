@@ -128,7 +128,9 @@ class OrderController {
    */
   async store(req, res, next) {
     try {
-      const result = await orderService.createOrder(req.body, req.user.id, req.branchId);
+      // userId references branch_users.id (nullable). Master users have no branchUser, so pass null.
+      const userId = req.user.branchUser?.id ?? null;
+      const result = await orderService.createOrder(req.body, userId, req.branchId);
 
       const responseData = {
         order: result.order
@@ -155,7 +157,8 @@ class OrderController {
    */
   async hold(req, res, next) {
     try {
-      const data = await orderService.holdOrder(req.body, req.user.id, req.branchId);
+      const userId = req.user.branchUser?.id ?? null;
+      const data = await orderService.holdOrder(req.body, userId, req.branchId);
 
       res.status(201).json({
         success: true,
@@ -180,8 +183,8 @@ class OrderController {
   async complete(req, res, next) {
     try {
       const data = await orderService.completeOrder(
-        req.params.id, 
-        req.user.id, 
+        req.params.id,
+        req.user.branchUser?.id ?? null,
         req.branchId,
         req.body
       );
@@ -203,7 +206,7 @@ class OrderController {
   async cancel(req, res, next) {
     try {
       const { reason } = req.body;
-      const data = await orderService.cancelOrder(req.params.id, req.user.id, reason, req.branchId);
+      const data = await orderService.cancelOrder(req.params.id, req.user.branchUser?.id ?? null, reason, req.branchId);
 
       res.json({
         success: true,
@@ -221,7 +224,7 @@ class OrderController {
    */
   async refund(req, res, next) {
     try {
-      const data = await orderService.refundOrder(req.params.id, req.user.id, req.body, req.branchId);
+      const data = await orderService.refundOrder(req.params.id, req.user.branchUser?.id ?? null, req.body, req.branchId);
 
       res.json({
         success: true,
@@ -239,7 +242,7 @@ class OrderController {
    */
   async reopen(req, res, next) {
     try {
-      const data = await orderService.reopenOrder(req.params.id, req.user.id, req.branchId);
+      const data = await orderService.reopenOrder(req.params.id, req.user.branchUser?.id ?? null, req.branchId);
 
       res.json({
         success: true,
@@ -257,7 +260,7 @@ class OrderController {
    */
   async resumeHeldOrder(req, res, next) {
     try {
-      const data = await orderService.resumeHeldOrder(req.params.id, req.user.id, req.branchId);
+      const data = await orderService.resumeHeldOrder(req.params.id, req.user.branchUser?.id ?? null, req.branchId);
 
       res.json({
         success: true,
@@ -276,9 +279,9 @@ class OrderController {
   async updateStatus(req, res, next) {
     try {
       const data = await orderService.updateOrderStatus(
-        req.params.id, 
-        req.body.status, 
-        req.user.id, 
+        req.params.id,
+        req.body.status,
+        req.user.branchUser?.id ?? null,
         req.branchId
       );
 
