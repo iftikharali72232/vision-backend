@@ -964,3 +964,26 @@ model Reservation {
   @@index([date])
   @@map("reservations")
 }
+
+// ================== AUDIT LOG ==================
+// Tracks all create/update/delete operations for compliance
+
+model AuditLog {
+  id           Int      @id @default(autoincrement())
+  branchId     Int?     @map("branch_id")
+  userId       Int      @map("user_id") // system_user_id
+  action       String   @db.VarChar(20) // create, update, delete
+  entity       String   @db.VarChar(100) // product, order, customer, etc.
+  entityId     Int?     @map("entity_id")
+  changes      Json?    // { field: { old: x, new: y } }
+  metadata     Json?    // Additional context
+  ipAddress    String?  @map("ip_address") @db.VarChar(45)
+  userAgent    String?  @map("user_agent") @db.VarChar(500)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([branchId])
+  @@index([userId])
+  @@index([entity])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

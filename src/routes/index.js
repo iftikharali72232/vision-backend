@@ -26,6 +26,7 @@ const roleRoutes = require('./role.routes');
 const systemMenuRoutes = require('./systemMenu.routes');
 const printerRoutes = require('./printer.routes');
 const printRoutes = require('./print.routes');
+const subscriptionRoutes = require('./subscription.routes');
 
 // Import controllers for aliases
 const accountingController = require('../controllers/accounting.controller');
@@ -57,6 +58,7 @@ router.use('/roles', roleRoutes);
 router.use('/system-menus', systemMenuRoutes);
 router.use('/printers', printerRoutes);
 router.use('/print', printRoutes);
+router.use('/subscription', subscriptionRoutes);
 
 // Alias route for product-categories
 router.use('/product-categories', categoryRoutes);
@@ -106,7 +108,8 @@ router.get('/', (req, res) => {
       roles: '/api/v1/roles',
       systemMenus: '/api/v1/system-menus',
       print: '/api/v1/print',
-      printers: '/api/v1/printers'
+      printers: '/api/v1/printers',
+      subscription: '/api/v1/subscription'
     }
   });
 });

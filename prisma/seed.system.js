@@ -28,9 +28,9 @@ const systemMenus = [
     displayOrder: 1,
     isSystem: true,
     children: [
-      { code: 'pos.orders', name: 'New Order', icon: 'HiPlus', route: '/pos', displayOrder: 1 },
-      { code: 'pos.held', name: 'Held Orders', icon: 'HiPause', route: '/pos/held', displayOrder: 2 },
-      { code: 'pos.tables', name: 'Tables', icon: 'HiViewGrid', route: '/pos/tables', displayOrder: 3 }
+      { code: 'pos.orders', name: 'New Order', nameAr: 'طلب جديد', nameUr: 'نیا آرڈر', icon: 'HiPlus', route: '/pos', displayOrder: 1 },
+      { code: 'pos.held', name: 'Held Orders', nameAr: 'الطلبات المعلقة', nameUr: 'روکے گئے آرڈرز', icon: 'HiPause', route: '/pos/held', displayOrder: 2 },
+      { code: 'pos.tables', name: 'Tables', nameAr: 'الطاولات', nameUr: 'ٹیبلز', icon: 'HiViewGrid', route: '/pos/tables', displayOrder: 3 }
     ]
   },
 
@@ -47,10 +47,10 @@ const systemMenus = [
     displayOrder: 2,
     isSystem: true,
     children: [
-      { code: 'sales.orders', name: 'Orders', icon: 'HiClipboardList', route: '/orders', displayOrder: 1 },
-      { code: 'sales.invoices', name: 'Invoices', icon: 'HiDocumentText', route: '/invoices', displayOrder: 2 },
-      { code: 'sales.returns', name: 'Returns', icon: 'HiReply', route: '/returns', displayOrder: 3 },
-      { code: 'sales.customers', name: 'Customers', icon: 'HiUsers', route: '/customers', displayOrder: 4 }
+      { code: 'sales.orders', name: 'Orders', nameAr: 'الطلبات', nameUr: 'آرڈرز', icon: 'HiClipboardList', route: '/orders', displayOrder: 1 },
+      { code: 'sales.invoices', name: 'Invoices', nameAr: 'الفواتير', nameUr: 'انوائسز', icon: 'HiDocumentText', route: '/invoices', displayOrder: 2 },
+      { code: 'sales.returns', name: 'Returns', nameAr: 'المرتجعات', nameUr: 'ریٹرنز', icon: 'HiReply', route: '/returns', displayOrder: 3 },
+      { code: 'sales.customers', name: 'Customers', nameAr: 'العملاء', nameUr: 'صارفین', icon: 'HiUsers', route: '/customers', displayOrder: 4 }
     ]
   },
 
@@ -67,12 +67,12 @@ const systemMenus = [
     displayOrder: 3,
     isSystem: true,
     children: [
-      { code: 'inventory.products', name: 'Products', icon: 'HiShoppingBag', route: '/products', displayOrder: 1 },
-      { code: 'inventory.categories', name: 'Categories', icon: 'HiFolder', route: '/categories', displayOrder: 2 },
-      { code: 'inventory.stock', name: 'Stock Management', icon: 'HiArchive', route: '/inventory/stock', displayOrder: 3 },
-      { code: 'inventory.movements', name: 'Stock Movements', icon: 'HiSwitchHorizontal', route: '/inventory/movements', displayOrder: 4 },
-      { code: 'inventory.alerts', name: 'Low Stock Alerts', icon: 'HiExclamation', route: '/inventory/alerts', displayOrder: 5 },
-      { code: 'inventory.suppliers', name: 'Suppliers', icon: 'HiTruck', route: '/inventory/suppliers', displayOrder: 6 }
+      { code: 'inventory.products', name: 'Products', nameAr: 'المنتجات', nameUr: 'مصنوعات', icon: 'HiShoppingBag', route: '/products', displayOrder: 1 },
+      { code: 'inventory.categories', name: 'Categories', nameAr: 'الفئات', nameUr: 'زمرے', icon: 'HiFolder', route: '/categories', displayOrder: 2 },
+      { code: 'inventory.stock', name: 'Stock Management', nameAr: 'إدارة المخزون', nameUr: 'اسٹاک مینجمنٹ', icon: 'HiArchive', route: '/inventory/stock', displayOrder: 3 },
+      { code: 'inventory.movements', name: 'Stock Movements', nameAr: 'حركات المخزون', nameUr: 'اسٹاک کی نقل و حرکت', icon: 'HiSwitchHorizontal', route: '/inventory/movements', displayOrder: 4 },
+      { code: 'inventory.alerts', name: 'Low Stock Alerts', nameAr: 'تنبيهات المخزون', nameUr: 'کم اسٹاک الرٹس', icon: 'HiExclamation', route: '/inventory/alerts', displayOrder: 5 },
+      { code: 'inventory.suppliers', name: 'Suppliers', nameAr: 'الموردون', nameUr: 'سپلائرز', icon: 'HiTruck', route: '/inventory/suppliers', displayOrder: 6 }
     ]
   },
 
@@ -89,12 +89,12 @@ const systemMenus = [
     displayOrder: 4,
     isSystem: true,
     children: [
-      { code: 'accounts.dashboard', name: 'Financial Dashboard', icon: 'HiChartPie', route: '/accounting', displayOrder: 1 },
-      { code: 'accounts.chart', name: 'Chart of Accounts', icon: 'HiCollection', route: '/accounting/chart', displayOrder: 2 },
-      { code: 'accounts.journal', name: 'Journal Entries', icon: 'HiBookOpen', route: '/accounting/journal', displayOrder: 3 },
-      { code: 'accounts.ledger', name: 'General Ledger', icon: 'HiDatabase', route: '/accounting/ledger', displayOrder: 4 },
-      { code: 'accounts.transactions', name: 'Transactions', icon: 'HiCreditCard', route: '/accounting/transactions', displayOrder: 5 },
-      { code: 'accounts.expenses', name: 'Expenses', icon: 'HiCash', route: '/accounting/expenses', displayOrder: 6 }
+      { code: 'accounts.dashboard', name: 'Financial Dashboard', nameAr: 'لوحة المالية', nameUr: 'مالیاتی ڈیش بورڈ', icon: 'HiChartPie', route: '/accounting', displayOrder: 1 },
+      { code: 'accounts.chart', name: 'Chart of Accounts', nameAr: 'دليل الحسابات', nameUr: 'چارٹ آف اکاؤنٹس', icon: 'HiCollection', route: '/accounting/chart', displayOrder: 2 },
+      { code: 'accounts.journal', name: 'Journal Entries', nameAr: 'القيود اليومية', nameUr: 'جرنل انٹریز', icon: 'HiBookOpen', route: '/accounting/journal', displayOrder: 3 },
+      { code: 'accounts.ledger', name: 'General Ledger', nameAr: 'الدفتر العام', nameUr: 'جنرل لیجر', icon: 'HiDatabase', route: '/accounting/ledger', displayOrder: 4 },
+      { code: 'accounts.transactions', name: 'Transactions', nameAr: 'المعاملات', nameUr: 'ٹرانزیکشنز', icon: 'HiCreditCard', route: '/accounting/transactions', displayOrder: 5 },
+      { code: 'accounts.expenses', name: 'Expenses', nameAr: 'المصروفات', nameUr: 'اخراجات', icon: 'HiCash', route: '/accounting/expenses', displayOrder: 6 }
     ]
   },
 
@@ -111,12 +111,12 @@ const systemMenus = [
     displayOrder: 5,
     isSystem: true,
     children: [
-      { code: 'reports.sales', name: 'Sales Report', icon: 'HiTrendingUp', route: '/reports/sales', displayOrder: 1 },
-      { code: 'reports.products', name: 'Product Report', icon: 'HiShoppingBag', route: '/reports/products', displayOrder: 2 },
-      { code: 'reports.inventory', name: 'Inventory Report', icon: 'HiCube', route: '/reports/inventory', displayOrder: 3 },
-      { code: 'reports.customers', name: 'Customer Report', icon: 'HiUsers', route: '/reports/customers', displayOrder: 4 },
-      { code: 'reports.financial', name: 'Financial Report', icon: 'HiCurrencyDollar', route: '/reports/financial', displayOrder: 5 },
-      { code: 'reports.staff', name: 'Staff Report', icon: 'HiUserGroup', route: '/reports/staff', displayOrder: 6 }
+      { code: 'reports.sales', name: 'Sales Report', nameAr: 'تقرير المبيعات', nameUr: 'سیلز رپورٹ', icon: 'HiTrendingUp', route: '/reports/sales', displayOrder: 1 },
+      { code: 'reports.products', name: 'Product Report', nameAr: 'تقرير المنتجات', nameUr: 'پروڈکٹ رپورٹ', icon: 'HiShoppingBag', route: '/reports/products', displayOrder: 2 },
+      { code: 'reports.inventory', name: 'Inventory Report', nameAr: 'تقرير المخزون', nameUr: 'انوینٹری رپورٹ', icon: 'HiCube', route: '/reports/inventory', displayOrder: 3 },
+      { code: 'reports.customers', name: 'Customer Report', nameAr: 'تقرير العملاء', nameUr: 'کسٹمر رپورٹ', icon: 'HiUsers', route: '/reports/customers', displayOrder: 4 },
+      { code: 'reports.financial', name: 'Financial Report', nameAr: 'التقرير المالي', nameUr: 'مالیاتی رپورٹ', icon: 'HiCurrencyDollar', route: '/reports/financial', displayOrder: 5 },
+      { code: 'reports.staff', name: 'Staff Report', nameAr: 'تقرير الموظفين', nameUr: 'اسٹاف رپورٹ', icon: 'HiUserGroup', route: '/reports/staff', displayOrder: 6 }
     ]
   },
 
@@ -148,9 +148,9 @@ const systemMenus = [
     displayOrder: 6,
     isSystem: true,
     children: [
-      { code: 'tables.list', name: 'All Tables', icon: 'HiViewGrid', route: '/tables', displayOrder: 1 },
-      { code: 'tables.halls', name: 'Halls', icon: 'HiOfficeBuilding', route: '/tables/halls', displayOrder: 2 },
-      { code: 'tables.reservations', name: 'Reservations', icon: 'HiCalendar', route: '/tables/reservations', displayOrder: 3 }
+      { code: 'tables.list', name: 'All Tables', nameAr: 'جميع الطاولات', nameUr: 'تمام ٹیبلز', icon: 'HiViewGrid', route: '/tables', displayOrder: 1 },
+      { code: 'tables.halls', name: 'Halls', nameAr: 'القاعات', nameUr: 'ہالز', icon: 'HiOfficeBuilding', route: '/tables/halls', displayOrder: 2 },
+      { code: 'tables.reservations', name: 'Reservations', nameAr: 'الحجوزات', nameUr: 'ریزرویشنز', icon: 'HiCalendar', route: '/tables/reservations', displayOrder: 3 }
     ]
   },
 
@@ -167,13 +167,13 @@ const systemMenus = [
     displayOrder: 10,
     isSystem: true,
     children: [
-      { code: 'settings.general', name: 'General Settings', icon: 'HiAdjustments', route: '/settings', displayOrder: 1 },
-      { code: 'settings.branch', name: 'Branch Settings', icon: 'HiOfficeBuilding', route: '/settings/branch', displayOrder: 2 },
-      { code: 'settings.taxes', name: 'Taxes', icon: 'HiReceiptTax', route: '/settings/taxes', displayOrder: 3, type: 'list' },
-      { code: 'settings.discounts', name: 'Discounts', icon: 'HiTag', route: '/settings/discounts', displayOrder: 4, type: 'list' },
-      { code: 'settings.payment', name: 'Payment Methods', icon: 'HiCreditCard', route: '/settings/payment', displayOrder: 5, type: 'list' },
-      { code: 'settings.printers', name: 'Printers', icon: 'HiPrinter', route: '/settings/printers', displayOrder: 6, type: 'list' },
-      { code: 'settings.receipt', name: 'Receipt Template', icon: 'HiDocumentText', route: '/settings/receipt', displayOrder: 7 }
+      { code: 'settings.general', name: 'General Settings', nameAr: 'الإعدادات العامة', nameUr: 'عمومی ترتیبات', icon: 'HiAdjustments', route: '/settings', displayOrder: 1 },
+      { code: 'settings.branch', name: 'Branch Settings', nameAr: 'إعدادات الفرع', nameUr: 'برانچ ترتیبات', icon: 'HiOfficeBuilding', route: '/settings/branch', displayOrder: 2 },
+      { code: 'settings.taxes', name: 'Taxes', nameAr: 'الضرائب', nameUr: 'ٹیکس', icon: 'HiReceiptTax', route: '/settings/taxes', displayOrder: 3, type: 'list' },
+      { code: 'settings.discounts', name: 'Discounts', nameAr: 'الخصومات', nameUr: 'ڈسکاؤنٹ', icon: 'HiTag', route: '/settings/discounts', displayOrder: 4, type: 'list' },
+      { code: 'settings.payment', name: 'Payment Methods', nameAr: 'طرق الدفع', nameUr: 'ادائیگی کے طریقے', icon: 'HiCreditCard', route: '/settings/payment', displayOrder: 5, type: 'list' },
+      { code: 'settings.printers', name: 'Printers', nameAr: 'الطابعات', nameUr: 'پرنٹرز', icon: 'HiPrinter', route: '/settings/printers', displayOrder: 6, type: 'list' },
+      { code: 'settings.receipt', name: 'Receipt Template', nameAr: 'قالب الإيصال', nameUr: 'رسید ٹیمپلیٹ', icon: 'HiDocumentText', route: '/settings/receipt', displayOrder: 7 }
     ]
   },
 
@@ -190,9 +190,9 @@ const systemMenus = [
     displayOrder: 9,
     isSystem: true,
     children: [
-      { code: 'users.list', name: 'All Users', icon: 'HiUsers', route: '/users', displayOrder: 1 },
-      { code: 'users.roles', name: 'Roles & Permissions', icon: 'HiShieldCheck', route: '/users/roles', displayOrder: 2 },
-      { code: 'users.branches', name: 'Branches', icon: 'HiOfficeBuilding', route: '/users/branches', displayOrder: 3 }
+      { code: 'users.list', name: 'All Users', nameAr: 'جميع المستخدمين', nameUr: 'تمام صارفین', icon: 'HiUsers', route: '/users', displayOrder: 1 },
+      { code: 'users.roles', name: 'Roles & Permissions', nameAr: 'الأدوار والصلاحيات', nameUr: 'رولز اور اجازتیں', icon: 'HiShieldCheck', route: '/users/roles', displayOrder: 2 },
+      { code: 'users.branches', name: 'Branches', nameAr: 'الفروع', nameUr: 'برانچز', icon: 'HiOfficeBuilding', route: '/users/branches', displayOrder: 3 }
     ]
   },
 
@@ -380,6 +380,8 @@ async function seedMenus() {
           where: { code: child.code },
           update: {
             name: child.name,
+            nameAr: child.nameAr || null,
+            nameUr: child.nameUr || null,
             icon: child.icon,
             route: child.route,
             displayOrder: child.displayOrder
@@ -388,6 +390,8 @@ async function seedMenus() {
             parentId: createdModule.id,
             code: child.code,
             name: child.name,
+            nameAr: child.nameAr || null,
+            nameUr: child.nameUr || null,
             type: child.type || 'menu',
             icon: child.icon,
             route: child.route,

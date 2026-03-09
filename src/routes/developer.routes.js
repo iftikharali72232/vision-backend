@@ -111,10 +111,45 @@ router.get('/stats', async (req, res) => {
     const [[{ totalUsers }]] = await conn.execute('SELECT COUNT(*) AS totalUsers FROM system_users WHERE is_developer=0');
     const [[{ activeUsers }]] = await conn.execute("SELECT COUNT(*) AS activeUsers FROM system_users WHERE status='active' AND is_developer=0");
     const [[{ masterUsers }]] = await conn.execute('SELECT COUNT(*) AS masterUsers FROM system_users WHERE is_master=1 AND is_developer=0');
+
+    // Revenue analytics
+    let revenue = { mrr: 0, totalRevenue: 0, thisMonth: 0, lastMonth: 0, recentPayments: [] };
+    try {
+      const [[{ totalRevenue }]] = await conn.execute("SELECT COALESCE(SUM(amount),0) AS totalRevenue FROM subscription_history WHERE status='completed'");
+      const [[{ thisMonth }]] = await conn.execute("SELECT COALESCE(SUM(amount),0) AS thisMonth FROM subscription_history WHERE status='completed' AND MONTH(created_at)=MONTH(NOW()) AND YEAR(created_at)=YEAR(NOW())");
+      const [[{ lastMonth }]] = await conn.execute("SELECT COALESCE(SUM(amount),0) AS lastMonth FROM subscription_history WHERE status='completed' AND MONTH(created_at)=MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)) AND YEAR(created_at)=YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH))");
+      const [[{ activePaidCount }]] = await conn.execute("SELECT COUNT(*) AS activePaidCount FROM companies WHERE status='active' AND subscription_ends_at > NOW()");
+      // Estimate MRR from active subscriptions
+      const [[{ estimatedMRR }]] = await conn.execute(`
+        SELECT COALESCE(SUM(sp.monthly_price), 0) AS estimatedMRR 
+        FROM companies c 
+        JOIN subscription_plans sp ON c.plan_id = sp.id 
+        WHERE c.status = 'active' AND c.subscription_ends_at > NOW()
+      `);
+      const [recentPayments] = await conn.execute(`
+        SELECT sh.id, sh.amount, sh.period, sh.payment_method, sh.status, sh.created_at, c.name AS company_name 
+        FROM subscription_history sh 
+        JOIN companies c ON sh.company_id = c.id 
+        ORDER BY sh.created_at DESC LIMIT 10
+      `);
+      revenue = {
+        mrr: Number(estimatedMRR) || 0,
+        totalRevenue: Number(totalRevenue) || 0,
+        thisMonth: Number(thisMonth) || 0,
+        lastMonth: Number(lastMonth) || 0,
+        activePaidCount: activePaidCount || 0,
+        recentPayments,
+      };
+    } catch (revenueErr) {
+      // Revenue tables might not exist yet — silently skip
+      console.warn('[DevStats] Revenue query failed:', revenueErr.message);
+    }
+
     await conn.end();
     res.json({ success: true, data: {
       companies: { total: totalCompanies, active: activeCompanies, trial: trialCompanies, suspended: suspendedCompanies },
       users: { total: totalUsers, active: activeUsers, masters: masterUsers },
+      revenue,
     }});
   } catch (err) {
     if (conn) await conn.end().catch(()=>{});
@@ -343,6 +378,216 @@ router.post('/maintenance/run', async (req, res) => {
     res.json({ success: allOk, migration, databases_processed: report.length, report });
   } catch (err) {
     if (sysCon) await sysCon.end().catch(()=>{});
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ── GET /dev-api/maintenance/pending-queries ─────────────────────────────────
+router.get('/maintenance/pending-queries', async (req, res) => {
+  try {
+    // Clear require cache so edits are picked up without restart
+    const queryFile = require.resolve('../../scripts/pending-queries');
+    delete require.cache[queryFile];
+    const QUERIES = require(queryFile);
+
+    // Check which ones were already executed
+    let executedIds = [];
+    let conn;
+    try {
+      conn = await sysConn();
+      const [rows] = await conn.execute(
+        `SELECT query_id FROM executed_queries`
+      ).catch(() => [[]]);
+      executedIds = rows.map(r => r.query_id);
+      await conn.end();
+    } catch (e) {
+      // Table might not exist yet — that's fine
+      if (conn) await conn.end().catch(() => {});
+    }
+
+    const queries = QUERIES.map(q => ({
+      id: q.id,
+      description: q.description,
+      target: q.target || 'all',
+      statementCount: Array.isArray(q.sql) ? q.sql.length : 1,
+      runOnce: !!q.runOnce,
+      alreadyExecuted: executedIds.includes(q.id),
+    }));
+
+    res.json({ success: true, data: queries, total: queries.length });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ── POST /dev-api/maintenance/run-pending-queries ────────────────────────────
+router.post('/maintenance/run-pending-queries', async (req, res) => {
+  const { queryIds } = req.body; // optional: run specific queries only
+
+  try {
+    // Clear require cache
+    const queryFile = require.resolve('../../scripts/pending-queries');
+    delete require.cache[queryFile];
+    const QUERIES = require(queryFile);
+
+    // Get already executed queries
+    let executedIds = new Set();
+    let sysCon;
+    try {
+      sysCon = await sysConn();
+      // Ensure tracking table exists
+      await sysCon.execute(`
+        CREATE TABLE IF NOT EXISTS executed_queries (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          query_id VARCHAR(100) NOT NULL UNIQUE,
+          description TEXT,
+          executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          executed_by VARCHAR(100) DEFAULT 'system',
+          result TEXT
+        )
+      `);
+      const [rows] = await sysCon.execute('SELECT query_id FROM executed_queries');
+      for (const r of rows) executedIds.add(r.query_id);
+    } catch (e) {
+      // proceed anyway
+    }
+
+    // Filter queries
+    let queriesToRun = QUERIES;
+    if (queryIds && queryIds.length > 0) {
+      queriesToRun = QUERIES.filter(q => queryIds.includes(q.id));
+    }
+
+    // Get tenant list
+    let tenants = [];
+    try {
+      if (!sysCon) sysCon = await sysConn();
+      const [rows] = await sysCon.execute(
+        "SELECT id, name, tenant_db FROM companies WHERE tenant_db IS NOT NULL AND status != 'deleted'"
+      );
+      tenants = rows;
+    } catch (e) {
+      // no tenants
+    }
+
+    const report = [];
+
+    for (const query of queriesToRun) {
+      // Skip if runOnce and already executed
+      if (query.runOnce && executedIds.has(query.id)) {
+        report.push({
+          queryId: query.id,
+          description: query.description,
+          skipped: true,
+          reason: 'Already executed (runOnce)',
+        });
+        continue;
+      }
+
+      const statements = Array.isArray(query.sql) ? query.sql : [query.sql];
+      const target = query.target || 'all';
+      const queryReport = {
+        queryId: query.id,
+        description: query.description,
+        target,
+        databases: [],
+      };
+
+      // Run on system DB
+      if (target === 'system' || target === 'all') {
+        let conn;
+        const steps = [];
+        try {
+          conn = await sysConn();
+          for (const stmt of statements) {
+            try {
+              await conn.execute(stmt);
+              steps.push({ sql: stmt.slice(0, 120), ok: true });
+            } catch (err) {
+              steps.push({ sql: stmt.slice(0, 120), ok: false, error: err.message });
+            }
+          }
+          await conn.end();
+          queryReport.databases.push({
+            db: 'system_db',
+            company: 'System Database',
+            success: steps.every(s => s.ok),
+            steps,
+          });
+        } catch (err) {
+          if (conn) await conn.end().catch(() => {});
+          queryReport.databases.push({
+            db: 'system_db',
+            company: 'System Database',
+            success: false,
+            error: err.message,
+          });
+        }
+      }
+
+      // Run on tenant DBs
+      if (target === 'tenants' || target === 'all') {
+        for (const tenant of tenants) {
+          let tc;
+          const steps = [];
+          try {
+            tc = await tenantConn(tenant.tenant_db);
+            for (const stmt of statements) {
+              try {
+                await tc.execute(stmt);
+                steps.push({ sql: stmt.slice(0, 120), ok: true });
+              } catch (err) {
+                steps.push({ sql: stmt.slice(0, 120), ok: false, error: err.message });
+              }
+            }
+            await tc.end();
+            queryReport.databases.push({
+              db: tenant.tenant_db,
+              company: tenant.name,
+              success: steps.every(s => s.ok),
+              steps,
+            });
+          } catch (err) {
+            if (tc) await tc.end().catch(() => {});
+            queryReport.databases.push({
+              db: tenant.tenant_db,
+              company: tenant.name,
+              success: false,
+              error: err.message,
+            });
+          }
+        }
+      }
+
+      // Track execution
+      const allSuccess = queryReport.databases.every(d => d.success);
+      if (query.runOnce && allSuccess) {
+        try {
+          const trackConn = await sysConn();
+          await trackConn.execute(
+            'INSERT IGNORE INTO executed_queries (query_id, description, executed_by) VALUES (?, ?, ?)',
+            [query.id, query.description, req.devUser?.email || 'developer']
+          );
+          await trackConn.end();
+          executedIds.add(query.id);
+        } catch (e) {
+          // tracking failed — non-critical
+        }
+      }
+
+      queryReport.success = allSuccess;
+      report.push(queryReport);
+    }
+
+    if (sysCon) await sysCon.end().catch(() => {});
+
+    const overallSuccess = report.every(r => r.skipped || r.success);
+    res.json({
+      success: overallSuccess,
+      queriesProcessed: report.length,
+      report,
+    });
+  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });

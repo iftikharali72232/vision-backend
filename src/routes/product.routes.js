@@ -3,6 +3,7 @@ const router = express.Router();
 const productController = require('../controllers/product.controller');
 const categoryController = require('../controllers/category.controller');
 const { authenticate, hasPermission, requireBranch, optionalBranch } = require('../middlewares/auth');
+const { checkPlanLimit } = require('../middlewares/planLimit');
 const validate = require('../middlewares/validate');
 const productValidation = require('../validations/product.validation');
 
@@ -66,6 +67,7 @@ router.post(
   '/',
   hasPermission('products', 'create'),
   requireBranch,
+  checkPlanLimit('products'),
   validate(productValidation.createProduct),
   productController.store
 );

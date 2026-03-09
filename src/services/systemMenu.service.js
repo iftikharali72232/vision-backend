@@ -250,6 +250,8 @@ class SystemMenuService {
         id: true,
         code: true,
         name: true,
+        nameAr: true,
+        nameUr: true,
         type: true,
         parentId: true
       },
@@ -263,6 +265,8 @@ class SystemMenuService {
       id: menu.id,
       code: menu.code,
       name: menu.name,
+      name_ar: menu.nameAr,
+      name_ur: menu.nameUr,
       type: menu.type,
       parent_id: menu.parentId
     }));
@@ -291,12 +295,16 @@ class SystemMenuService {
       id: mod.id,
       code: mod.code,
       name: mod.name,
+      name_ar: mod.nameAr,
+      name_ur: mod.nameUr,
       icon: mod.icon,
       route: mod.route,
       menus: mod.children.map(child => ({
         id: child.id,
         code: child.code,
         name: child.name,
+        name_ar: child.nameAr,
+        name_ur: child.nameUr,
         icon: child.icon,
         route: child.route,
         type: child.type
@@ -362,6 +370,8 @@ class SystemMenuService {
         id: c.id,
         code: c.code,
         name: c.name,
+        name_ar: c.nameAr,
+        name_ur: c.nameUr,
         icon: c.icon,
         route: c.route,
         type: c.type

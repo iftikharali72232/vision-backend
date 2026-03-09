@@ -10,6 +10,8 @@ const { errorHandler, notFound } = require('./middlewares/errorHandler');
 const routes = require('./routes');
 const maintenanceRoutes = require('./routes/maintenance.routes');
 const developerRoutes = require('./routes/developer.routes');
+const subscriptionRoutes = require('./routes/subscription.routes');
+const cronService = require('./services/cron.service');
 
 const app = express();
 
@@ -45,6 +47,10 @@ app.use(cors({
   },
   credentials: true
 }));
+
+// Stripe webhook needs raw body (must be before json parser)
+app.post('/api/subscription/webhook', express.raw({ type: 'application/json' }));
+app.post('/api/v1/subscription/webhook', express.raw({ type: 'application/json' }));
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
@@ -117,6 +123,9 @@ app.use(notFound);
 
 // Global error handler
 app.use(errorHandler);
+
+// Start cron jobs
+cronService.start();
 
 // Start server
 const PORT = process.env.PORT || 5000;

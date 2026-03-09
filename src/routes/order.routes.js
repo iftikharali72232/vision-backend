@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const orderController = require('../controllers/order.controller');
 const { authenticate, hasPermission, requireBranch } = require('../middlewares/auth');
+const { checkPlanLimit } = require('../middlewares/planLimit');
 const validate = require('../middlewares/validate');
 const orderValidation = require('../validations/order.validation');
 
@@ -74,6 +75,7 @@ router.delete(
 router.post(
   '/',
   requireBranch,
+  checkPlanLimit('orders'),
   validate(orderValidation.createOrder),
   orderController.store
 );

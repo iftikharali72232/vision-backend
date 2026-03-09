@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const branchController = require('../controllers/branch.controller');
 const { authenticate, requirePermission } = require('../middlewares/auth');
+const { checkPlanLimit } = require('../middlewares/planLimit');
 const validate = require('../middlewares/validate');
 const branchValidation = require('../validations/branch.validation');
 
@@ -27,6 +28,7 @@ router.get(
 router.post(
   '/',
   requirePermission('branches.create'),
+  checkPlanLimit('branches'),
   validate(branchValidation.createBranch),
   branchController.createBranch
 );

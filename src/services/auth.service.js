@@ -13,6 +13,7 @@ const {
 } = require('../config/database');
 const { jwt: jwtConfig, bcrypt: bcryptConfig } = require('../config/constants');
 const { AuthenticationError, NotFoundError, AppError } = require('../middlewares/errorHandler');
+const emailService = require('./email.service');
 
 class AuthService {
   /**
@@ -338,7 +339,7 @@ class AuthService {
           phone,
           tenantDb: tempTenantDb,
           status: 'trial',
-          trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days trial
+          subscriptionEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days trial
         }
       });
 
@@ -365,13 +366,18 @@ class AuthService {
         }
       });
 
-      // TODO: Send OTP via email/SMS
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`[OTP] user=${user.id} email=${user.email} otp=${otp}`);
-      }
-
       return { user, company, otp };
     });
+
+    // Send OTP via email (after transaction completes)
+    try {
+      await emailService.sendOtp(result.user.email, result.user.name, result.otp);
+    } catch (emailErr) {
+      console.warn('[Register] OTP email failed:', emailErr.message);
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[OTP] user=${result.user.id} email=${result.user.email} otp=${result.otp}`);
+    }
 
     return {
       user_id: result.user.id,
@@ -454,6 +460,14 @@ class AuthService {
       })
     ]);
 
+    // Send welcome email
+    try {
+      const verifiedUser = await systemPrisma.systemUser.findUnique({ where: { id: user.id } });
+      await emailService.sendWelcome(verifiedUser.email, verifiedUser.name);
+    } catch (emailErr) {
+      console.warn('[VerifyOtp] Welcome email failed:', emailErr.message);
+    }
+
     return {
       verified: true,
       message: 'Account verified successfully. You can now login.',
@@ -490,7 +504,12 @@ class AuthService {
       }
     });
 
-    // TODO: Send OTP via email/SMS
+    // Send OTP via email
+    try {
+      await emailService.sendOtp(user.email, user.name, otp);
+    } catch (emailErr) {
+      console.warn('[ResendOtp] OTP email failed:', emailErr.message);
+    }
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[OTP RESEND] user=${user.id} email=${user.email} otp=${otp}`);
     }

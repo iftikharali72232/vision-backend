@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/user.controller');
 const { authenticate, requirePermission } = require('../middlewares/auth');
+const { checkPlanLimit } = require('../middlewares/planLimit');
 const validate = require('../middlewares/validate');
 const userValidation = require('../validations/user.validation');
 
@@ -28,6 +29,7 @@ router.get(
 router.post(
   '/',
   requirePermission('users.create'),
+  checkPlanLimit('users'),
   validate(userValidation.createUser),
   userController.createUser
 );

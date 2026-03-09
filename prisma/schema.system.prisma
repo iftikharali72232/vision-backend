@@ -137,6 +137,7 @@ model Company {
   roles          Role[]
   plan           SubscriptionPlan? @relation(fields: [planId], references: [id])
   subscriptionHistory SubscriptionHistory[]
+  subscriptionInvoices SubscriptionInvoice[]
 
   @@index([slug])
   @@index([tenantDb])
@@ -148,19 +149,28 @@ model Company {
 
 model SubscriptionPlan {
   id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(100) // Basic, Pro
-  code        String   @unique @db.VarChar(50) // basic, pro
+  name        String   @db.VarChar(100) // Free, Basic, Pro, Enterprise
+  code        String   @unique @db.VarChar(50) // free, basic, pro, enterprise
   description String?  @db.Text
   features    Json     // Array of feature codes enabled for this plan
   monthlyPrice Decimal @map("monthly_price") @db.Decimal(10, 2)
   yearlyPrice  Decimal @map("yearly_price") @db.Decimal(10, 2)
+  // Plan limits
+  maxProducts    Int      @default(50)  @map("max_products")
+  maxBranches    Int      @default(1)   @map("max_branches")
+  maxUsers       Int      @default(3)   @map("max_users")
+  maxOrdersPerMonth Int   @default(500) @map("max_orders_per_month")
+  storageLimit   Int      @default(500) @map("storage_limit") // MB
+  trialDays      Int      @default(14)  @map("trial_days")
   isActive    Boolean  @default(true) @map("is_active")
+  displayOrder Int      @default(0) @map("display_order")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   // Relations
   companies         Company[]
   subscriptionHistory SubscriptionHistory[]
+  subscriptionInvoices SubscriptionInvoice[]
 
   @@index([code])
   @@map("subscription_plans")
@@ -190,6 +200,40 @@ model SubscriptionHistory {
   @@index([planId])
   @@index([renewedAt])
   @@map("subscription_history")
+}
+
+// ================== SUBSCRIPTION INVOICES ==================
+// SaaS billing invoices for subscription payments
+
+model SubscriptionInvoice {
+  id              Int      @id @default(autoincrement())
+  companyId       Int      @map("company_id")
+  planId          Int      @map("plan_id")
+  invoiceNumber   String   @unique @map("invoice_number") @db.VarChar(50)
+  amount          Decimal  @db.Decimal(10, 2)
+  tax             Decimal  @default(0) @db.Decimal(10, 2)
+  total           Decimal  @db.Decimal(10, 2)
+  currency        String   @default("PKR") @db.VarChar(10)
+  period          String   @db.VarChar(20) // monthly, yearly
+  paymentMethod   String   @map("payment_method") @db.VarChar(50)
+  paymentRef      String?  @map("payment_ref") @db.VarChar(255)
+  stripePaymentId String?  @map("stripe_payment_id") @db.VarChar(255)
+  status          String   @default("pending") @db.VarChar(50) // pending, paid, failed, refunded
+  billingName     String?  @map("billing_name") @db.VarChar(255)
+  billingEmail    String?  @map("billing_email") @db.VarChar(255)
+  billingAddress  String?  @map("billing_address") @db.Text
+  periodStart     DateTime @map("period_start")
+  periodEnd       DateTime @map("period_end")
+  paidAt          DateTime? @map("paid_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  company    Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  plan       SubscriptionPlan  @relation(fields: [planId], references: [id])
+
+  @@index([companyId])
+  @@index([invoiceNumber])
+  @@index([status])
+  @@map("subscription_invoices")
 }
 
 // ================== SYSTEM MENUS ==================
